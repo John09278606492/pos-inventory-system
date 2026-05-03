@@ -1,7 +1,6 @@
-
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Sale, ReturnTransaction, User, Customer } from '../types';
-import { Search, Calendar, Filter, Eye, RotateCcw, CheckCircle, AlertTriangle, User as UserIcon, CreditCard, Banknote, Smartphone, Wallet, X, ChevronDown, TrendingUp, ShoppingBag, ArrowDownRight, DollarSign, Coins } from 'lucide-react';
+import { Search, Calendar, Filter, Eye, RotateCcw, CheckCircle, AlertTriangle, User as UserIcon, CreditCard, Banknote, Smartphone, Wallet, X, ChevronDown, TrendingUp, ShoppingBag, ArrowDownRight, DollarSign, Coins, FileText, Download } from 'lucide-react';
 
 interface SalesHistoryProps {
   sales: Sale[];
@@ -18,6 +17,7 @@ const SalesHistory: React.FC<SalesHistoryProps> = ({
   customers, 
   currency 
 }) => {
+  const [activeTab, setActiveTab] = useState<'SALES' | 'RETURNS'>('SALES');
   const [searchTerm, setSearchTerm] = useState('');
   
   // Date Range State
@@ -103,42 +103,75 @@ const SalesHistory: React.FC<SalesHistoryProps> = ({
     return 'PARTIAL'; // Partially Returned
   };
 
-  const filteredSales = sales.filter(sale => {
-    // Search Filter
-    const searchMatch = 
-      sale.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (sale.customerName && sale.customerName.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      users.find(u => u.id === sale.cashierId)?.name.toLowerCase().includes(searchTerm.toLowerCase());
+  const filteredSales = useMemo(() => {
+    return sales.filter(sale => {
+        // Search Filter
+        const searchMatch = 
+          sale.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          (sale.customerName && sale.customerName.toLowerCase().includes(searchTerm.toLowerCase())) ||
+          users.find(u => u.id === sale.cashierId)?.name.toLowerCase().includes(searchTerm.toLowerCase());
 
-    // Date Range Filter
-    let dateMatch = true;
-    if (startDate || endDate) {
-        const saleDate = new Date(sale.timestamp);
-        saleDate.setHours(0,0,0,0);
-        
-        if (startDate) {
-            const start = new Date(startDate);
-            start.setHours(0,0,0,0);
-            if (saleDate.getTime() < start.getTime()) dateMatch = false;
+        // Date Range Filter
+        let dateMatch = true;
+        if (startDate || endDate) {
+            const saleDate = new Date(sale.timestamp);
+            saleDate.setHours(0,0,0,0);
+            
+            if (startDate) {
+                const start = new Date(startDate);
+                start.setHours(0,0,0,0);
+                if (saleDate.getTime() < start.getTime()) dateMatch = false;
+            }
+            if (endDate) {
+                const end = new Date(endDate);
+                end.setHours(23,59,59,999);
+                if (saleDate.getTime() > end.getTime()) dateMatch = false;
+            }
         }
-        if (endDate) {
-            const end = new Date(endDate);
-            end.setHours(23,59,59,999);
-            if (saleDate.getTime() > end.getTime()) dateMatch = false;
+
+        // Status Filter
+        let statusMatch = true;
+        if (statusFilter !== 'ALL') {
+            const status = getSaleStatus(sale.id);
+            if (statusFilter === 'COMPLETED' && status !== 'COMPLETED') statusMatch = false;
+            if (statusFilter === 'RETURNED' && status !== 'RETURNED') statusMatch = false;
+            if (statusFilter === 'PARTIAL' && status !== 'PARTIAL') statusMatch = false;
         }
-    }
 
-    // Status Filter
-    let statusMatch = true;
-    if (statusFilter !== 'ALL') {
-        const status = getSaleStatus(sale.id);
-        if (statusFilter === 'COMPLETED' && status !== 'COMPLETED') statusMatch = false;
-        if (statusFilter === 'RETURNED' && status !== 'RETURNED') statusMatch = false;
-        if (statusFilter === 'PARTIAL' && status !== 'PARTIAL') statusMatch = false;
-    }
+        return searchMatch && dateMatch && statusMatch;
+    }).sort((a, b) => b.timestamp - a.timestamp);
+  }, [sales, searchTerm, startDate, endDate, statusFilter, users, returns]);
 
-    return searchMatch && dateMatch && statusMatch;
-  }).sort((a, b) => b.timestamp - a.timestamp);
+  const filteredReturns = useMemo(() => {
+      return returns.filter(ret => {
+          // Search Filter
+          const sale = sales.find(s => s.id === ret.originalSaleId);
+          const customerName = sale?.customerName || '';
+          
+          const searchMatch = 
+            ret.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            ret.originalSaleId.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            customerName.toLowerCase().includes(searchTerm.toLowerCase());
+
+          // Date Filter
+          let dateMatch = true;
+          if (startDate || endDate) {
+              const retDate = new Date(ret.timestamp);
+              retDate.setHours(0,0,0,0);
+              if (startDate) {
+                  const start = new Date(startDate);
+                  start.setHours(0,0,0,0);
+                  if (retDate.getTime() < start.getTime()) dateMatch = false;
+              }
+              if (endDate) {
+                  const end = new Date(endDate);
+                  end.setHours(23,59,59,999);
+                  if (retDate.getTime() > end.getTime()) dateMatch = false;
+              }
+          }
+          return searchMatch && dateMatch;
+      }).sort((a, b) => b.timestamp - a.timestamp);
+  }, [returns, sales, searchTerm, startDate, endDate]);
 
   // --- Summary Calculations ---
   const totalOrders = filteredSales.length;
@@ -172,6 +205,114 @@ const SalesHistory: React.FC<SalesHistoryProps> = ({
 
   const netProfit = grossProfit - profitLost;
 
+  // --- Export Logic ---
+  const handleExportSales = () => {
+      let tableContent = `
+          <tr style="height: 40px;"><td colspan="15" style="font-size: 16px; font-weight: bold; background-color: #e2e8f0; text-align: center; vertical-align: middle;">Detailed Sales Report - ${new Date().toLocaleDateString()}</td></tr>
+          <tr><td colspan="15"></td></tr>
+          <tr>
+              <td colspan="3" style="font-weight: bold;">Date Range: ${startDate || 'Start'} to ${endDate || 'Present'}</td>
+              <td colspan="3" style="font-weight: bold;">Total Orders: ${totalOrders}</td>
+              <td colspan="3" style="font-weight: bold;">Gross Sales: ${currency} ${grossSales.toFixed(2)}</td>
+              <td colspan="3" style="font-weight: bold;">Net Sales: ${currency} ${netSales.toFixed(2)}</td>
+              <td colspan="3" style="font-weight: bold;">Net Profit: ${currency} ${netProfit.toFixed(2)}</td>
+          </tr>
+          <tr><td colspan="15"></td></tr>
+          <tr style="background-color: #1e293b; color: white; font-weight: bold;">
+              <th style="padding: 10px; border: 1px solid #ccc;">Sale ID</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Date</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Time</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Customer</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Type</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Cashier</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Payment</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Items Summary</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Subtotal</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Tax</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Total Amount</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Refunded</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Net Amount</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Profit</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Status</th>
+          </tr>
+      `;
+
+      filteredSales.forEach(sale => {
+          // Find specific refunds for this sale
+          const thisSaleReturns = returns.filter(r => r.originalSaleId === sale.id);
+          const thisSaleRefunded = thisSaleReturns.reduce((sum, r) => sum + r.totalRefund, 0);
+          
+          // Calculate specific profit loss
+          const thisSaleProfitLost = thisSaleReturns.reduce((acc, ret) => {
+              return acc + ret.items.reduce((loss, rItem) => {
+                  const origItem = sale.items.find(i => i.productId === rItem.productId);
+                  if (!origItem) return loss;
+                  return loss + ((origItem.priceAtSale - origItem.costAtSale) * rItem.quantity);
+              }, 0);
+          }, 0);
+
+          const thisNetProfit = sale.totalProfit - thisSaleProfitLost;
+          const status = getSaleStatus(sale.id);
+          const statusColor = status === 'COMPLETED' ? '#f0fdf4' : status === 'RETURNED' ? '#fef2f2' : '#fffbeb';
+          const itemsSummary = sale.items.map(i => `${i.productName} (x${i.quantity})`).join(', ');
+          const customer = customers.find(c => c.id === sale.customerId);
+          const customerType = customer ? (customer.type === 'MEMBER' ? 'Member' : 'Walk-in') : 'Walk-in';
+          const cashierName = users.find(u => u.id === sale.cashierId)?.name || 'Unknown';
+
+          tableContent += `
+              <tr style="background-color: ${statusColor};">
+                  <td style="border: 1px solid #ccc; mso-number-format:'@'">${sale.id.split('-')[1]}</td>
+                  <td style="border: 1px solid #ccc;">${new Date(sale.timestamp).toLocaleDateString()}</td>
+                  <td style="border: 1px solid #ccc;">${new Date(sale.timestamp).toLocaleTimeString()}</td>
+                  <td style="border: 1px solid #ccc;">${sale.customerName || 'Guest'}</td>
+                  <td style="border: 1px solid #ccc;">${customerType}</td>
+                  <td style="border: 1px solid #ccc;">${cashierName}</td>
+                  <td style="border: 1px solid #ccc;">${sale.paymentMethod}</td>
+                  <td style="border: 1px solid #ccc;">${itemsSummary}</td>
+                  <td style="border: 1px solid #ccc;">${sale.subTotal.toFixed(2)}</td>
+                  <td style="border: 1px solid #ccc;">${sale.totalTax.toFixed(2)}</td>
+                  <td style="border: 1px solid #ccc; font-weight: bold;">${sale.totalAmount.toFixed(2)}</td>
+                  <td style="border: 1px solid #ccc; color: #dc2626;">${thisSaleRefunded > 0 ? '-' + thisSaleRefunded.toFixed(2) : '0.00'}</td>
+                  <td style="border: 1px solid #ccc; font-weight: bold;">${(sale.totalAmount - thisSaleRefunded).toFixed(2)}</td>
+                  <td style="border: 1px solid #ccc;">${thisNetProfit.toFixed(2)}</td>
+                  <td style="border: 1px solid #ccc;">${status}</td>
+              </tr>
+          `;
+      });
+
+      const fullTemplate = `
+          <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+          <head>
+              <!--[if gte mso 9]>
+              <xml>
+                  <x:ExcelWorkbook>
+                      <x:ExcelWorksheets>
+                          <x:ExcelWorksheet>
+                              <x:Name>Sales Export</x:Name>
+                              <x:WorksheetOptions>
+                                  <x:DisplayGridlines/>
+                              </x:WorksheetOptions>
+                          </x:ExcelWorksheet>
+                      </x:ExcelWorksheets>
+                  </x:ExcelWorkbook>
+              </xml>
+              <![endif]-->
+              <meta http-equiv="content-type" content="text/plain; charset=UTF-8"/>
+          </head>
+          <body>
+              <table>${tableContent}</table>
+          </body>
+          </html>
+      `;
+
+      const blob = new Blob([fullTemplate], { type: 'application/vnd.ms-excel' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Sales_Report_${new Date().toISOString().split('T')[0]}.xls`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+  };
 
   const getPaymentIcon = (method: string) => {
       switch(method) {
@@ -214,8 +355,31 @@ const SalesHistory: React.FC<SalesHistoryProps> = ({
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h2 className="text-3xl font-bold text-slate-800 dark:text-white">Sales History</h2>
+          <h2 className="text-3xl font-bold text-slate-800 dark:text-white">History Logs</h2>
           <p className="text-slate-500 text-sm mt-1">View transaction logs, summaries, and detailed return information.</p>
+        </div>
+        <div className="flex items-center gap-3">
+            <button 
+                onClick={handleExportSales}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg flex items-center transition shadow-sm font-medium text-sm"
+                title="Export Sales to Excel"
+            >
+                <Download size={16} className="mr-2" /> Export XLS
+            </button>
+            <div className="flex bg-slate-100 dark:bg-slate-700 p-1 rounded-lg">
+                <button 
+                    onClick={() => setActiveTab('SALES')}
+                    className={`px-4 py-2 text-sm font-medium rounded-md transition ${activeTab === 'SALES' ? 'bg-white dark:bg-slate-600 shadow text-blue-600 dark:text-blue-400' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700'}`}
+                >
+                    Sales Log
+                </button>
+                <button 
+                    onClick={() => setActiveTab('RETURNS')}
+                    className={`px-4 py-2 text-sm font-medium rounded-md transition ${activeTab === 'RETURNS' ? 'bg-white dark:bg-slate-600 shadow text-red-600 dark:text-red-400' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700'}`}
+                >
+                    Returns Log
+                </button>
+            </div>
         </div>
       </div>
 
@@ -227,7 +391,7 @@ const SalesHistory: React.FC<SalesHistoryProps> = ({
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" size={18} />
                 <input 
                   type="text" 
-                  placeholder="Order ID, Customer, or Cashier..." 
+                  placeholder={activeTab === 'SALES' ? "Order ID, Customer, or Cashier..." : "Return ID, Order Ref, or Customer..."}
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 dark:bg-slate-700 dark:text-white dark:placeholder-slate-400"
@@ -304,22 +468,25 @@ const SalesHistory: React.FC<SalesHistoryProps> = ({
               )}
           </div>
 
-          <div className="w-full md:w-48">
-              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Status</label>
-              <div className="relative">
-                  <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" size={18} />
-                  <select 
-                    value={statusFilter}
-                    onChange={(e) => setStatusFilter(e.target.value as any)}
-                    className="w-full pl-10 pr-8 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 dark:bg-slate-700 dark:text-white appearance-none min-w-[150px]"
-                  >
-                      <option value="ALL">All Sales</option>
-                      <option value="COMPLETED">Completed</option>
-                      <option value="PARTIAL">Partial Return</option>
-                      <option value="RETURNED">Fully Returned</option>
-                  </select>
+          {activeTab === 'SALES' && (
+              <div className="w-full md:w-48">
+                  <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Status</label>
+                  <div className="relative">
+                      <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" size={18} />
+                      <select 
+                        value={statusFilter}
+                        onChange={(e) => setStatusFilter(e.target.value as any)}
+                        className="w-full pl-10 pr-8 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 dark:bg-slate-700 dark:text-white appearance-none min-w-[150px]"
+                      >
+                          <option value="ALL">All Sales</option>
+                          <option value="COMPLETED">Completed</option>
+                          <option value="PARTIAL">Partial Return</option>
+                          <option value="RETURNED">Fully Returned</option>
+                      </select>
+                  </div>
               </div>
-          </div>
+          )}
+          
           <button 
              onClick={() => { setSearchTerm(''); setStartDate(''); setEndDate(''); setStatusFilter('ALL'); }}
              className="px-4 py-2.5 text-sm font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 whitespace-nowrap bg-slate-100 dark:bg-slate-700/50 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-600 transition"
@@ -329,115 +496,178 @@ const SalesHistory: React.FC<SalesHistoryProps> = ({
       </div>
 
       {/* Summary Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex items-center">
-            <div className="p-3 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 mr-4">
-                <ShoppingBag size={20} />
+      {activeTab === 'SALES' && (
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex items-center">
+                <div className="p-3 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 mr-4">
+                    <ShoppingBag size={20} />
+                </div>
+                <div>
+                    <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Orders</p>
+                    <p className="text-lg font-bold text-slate-800 dark:text-white">{totalOrders}</p>
+                </div>
             </div>
-            <div>
-                <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Orders</p>
-                <p className="text-lg font-bold text-slate-800 dark:text-white">{totalOrders}</p>
+            <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex items-center">
+                <div className="p-3 rounded-full bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 mr-4">
+                    <DollarSign size={20} />
+                </div>
+                <div>
+                    <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Gross Sales</p>
+                    <p className="text-lg font-bold text-indigo-600 dark:text-indigo-400">{symbol}{grossSales.toFixed(2)}</p>
+                </div>
             </div>
-        </div>
-        <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex items-center">
-            <div className="p-3 rounded-full bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 mr-4">
-                <DollarSign size={20} />
+            <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex items-center">
+                 <div className="p-3 rounded-full bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 mr-4">
+                    <RotateCcw size={20} />
+                </div>
+                <div>
+                    <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Refunds</p>
+                    <p className="text-lg font-bold text-red-600 dark:text-red-400">-{symbol}{totalRefunded.toFixed(2)}</p>
+                </div>
             </div>
-            <div>
-                <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Gross Sales</p>
-                <p className="text-lg font-bold text-indigo-600 dark:text-indigo-400">{symbol}{grossSales.toFixed(2)}</p>
+            <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex items-center">
+                <div className="p-3 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 mr-4">
+                    <Coins size={20} />
+                </div>
+                <div>
+                    <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Net Sales</p>
+                    <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400">{symbol}{netSales.toFixed(2)}</p>
+                </div>
             </div>
-        </div>
-        <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex items-center">
-             <div className="p-3 rounded-full bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 mr-4">
-                <RotateCcw size={20} />
+             <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex items-center">
+                <div className="p-3 rounded-full bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 mr-4">
+                    <TrendingUp size={20} />
+                </div>
+                <div>
+                    <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Net Profit</p>
+                    <p className="text-lg font-bold text-green-600 dark:text-green-400">{symbol}{netProfit.toFixed(2)}</p>
+                </div>
             </div>
-            <div>
-                <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Refunds</p>
-                <p className="text-lg font-bold text-red-600 dark:text-red-400">-{symbol}{totalRefunded.toFixed(2)}</p>
-            </div>
-        </div>
-        <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex items-center">
-            <div className="p-3 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 mr-4">
-                <Coins size={20} />
-            </div>
-            <div>
-                <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Net Sales</p>
-                <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400">{symbol}{netSales.toFixed(2)}</p>
-            </div>
-        </div>
-         <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex items-center">
-            <div className="p-3 rounded-full bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 mr-4">
-                <TrendingUp size={20} />
-            </div>
-            <div>
-                <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Net Profit</p>
-                <p className="text-lg font-bold text-green-600 dark:text-green-400">{symbol}{netProfit.toFixed(2)}</p>
-            </div>
-        </div>
-      </div>
+          </div>
+      )}
 
       {/* Sales List */}
-      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
-        <table className="w-full text-left border-collapse">
-          <thead className="bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700">
-            <tr>
-              <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm">Sale ID</th>
-              <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm">Date & Time</th>
-              <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm">Customer</th>
-              <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm">Cashier</th>
-              <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm">Status</th>
-              <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm text-right">Amount</th>
-              <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-            {filteredSales.length === 0 ? (
-                <tr><td colSpan={7} className="p-8 text-center text-slate-500 dark:text-slate-400">No sales transactions found matching filters.</td></tr>
-            ) : (
-                filteredSales.map(sale => {
-                    const status = getSaleStatus(sale.id);
-                    const cashierName = users.find(u => u.id === sale.cashierId)?.name || 'Unknown';
-                    const customerName = sale.customerName || 'Guest / Walk-in';
+      {activeTab === 'SALES' && (
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
+            <table className="w-full text-left border-collapse">
+              <thead className="bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700">
+                <tr>
+                  <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm">Sale ID</th>
+                  <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm">Date & Time</th>
+                  <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm">Customer</th>
+                  <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm">Cashier</th>
+                  <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm">Status</th>
+                  <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm text-right">Amount</th>
+                  <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                {filteredSales.length === 0 ? (
+                    <tr><td colSpan={7} className="p-8 text-center text-slate-500 dark:text-slate-400">No sales transactions found matching filters.</td></tr>
+                ) : (
+                    filteredSales.map(sale => {
+                        const status = getSaleStatus(sale.id);
+                        const cashierName = users.find(u => u.id === sale.cashierId)?.name || 'Unknown';
+                        const customerName = sale.customerName || 'Guest / Walk-in';
 
-                    return (
-                        <tr key={sale.id} className="border-b border-slate-100 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
-                            <td className="p-4 font-mono text-xs text-slate-600 dark:text-slate-400">#{sale.id.split('-')[1]}</td>
-                            <td className="p-4 text-sm text-slate-600 dark:text-slate-300">
-                                {new Date(sale.timestamp).toLocaleDateString()}
-                                <div className="text-xs text-slate-400">{new Date(sale.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
-                            </td>
-                            <td className="p-4 text-sm font-medium text-slate-800 dark:text-white">
-                                <div className="flex items-center">
-                                    <UserIcon size={14} className="mr-2 text-slate-400"/>
-                                    {customerName}
-                                </div>
-                            </td>
-                            <td className="p-4 text-sm text-slate-600 dark:text-slate-300">{cashierName.split(' ')[0]}</td>
-                            <td className="p-4">
-                                {getStatusBadge(status)}
-                            </td>
-                            <td className="p-4 text-right">
-                                <div className="font-bold text-slate-800 dark:text-white">{symbol}{sale.totalAmount.toFixed(2)}</div>
-                                <div className="flex items-center justify-end text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                                    {getPaymentIcon(sale.paymentMethod)} {sale.paymentMethod.replace('_', ' ')}
-                                </div>
-                            </td>
-                            <td className="p-4 text-right">
-                                <button 
-                                  onClick={() => setSelectedSale(sale)}
-                                  className="p-1.5 text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30 rounded"
-                                >
-                                    <Eye size={18} />
-                                </button>
-                            </td>
-                        </tr>
-                    );
-                })
-            )}
-          </tbody>
-        </table>
-      </div>
+                        return (
+                            <tr key={sale.id} className="border-b border-slate-100 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
+                                <td className="p-4 font-mono text-xs text-slate-600 dark:text-slate-400">#{sale.id.split('-')[1]}</td>
+                                <td className="p-4 text-sm text-slate-600 dark:text-slate-300">
+                                    {new Date(sale.timestamp).toLocaleDateString()}
+                                    <div className="text-xs text-slate-400">{new Date(sale.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
+                                </td>
+                                <td className="p-4 text-sm font-medium text-slate-800 dark:text-white">
+                                    <div className="flex items-center">
+                                        <UserIcon size={14} className="mr-2 text-slate-400"/>
+                                        {customerName}
+                                    </div>
+                                </td>
+                                <td className="p-4 text-sm text-slate-600 dark:text-slate-300">{cashierName.split(' ')[0]}</td>
+                                <td className="p-4">
+                                    {getStatusBadge(status)}
+                                </td>
+                                <td className="p-4 text-right">
+                                    <div className="font-bold text-slate-800 dark:text-white">{symbol}{sale.totalAmount.toFixed(2)}</div>
+                                    <div className="flex items-center justify-end text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                                        {getPaymentIcon(sale.paymentMethod)} {sale.paymentMethod.replace('_', ' ')}
+                                    </div>
+                                </td>
+                                <td className="p-4 text-right">
+                                    <button 
+                                      onClick={() => setSelectedSale(sale)}
+                                      className="p-1.5 text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30 rounded"
+                                    >
+                                        <Eye size={18} />
+                                    </button>
+                                </td>
+                            </tr>
+                        );
+                    })
+                )}
+              </tbody>
+            </table>
+          </div>
+      )}
+
+      {/* Returns List */}
+      {activeTab === 'RETURNS' && (
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
+              <table className="w-full text-left border-collapse">
+                  <thead className="bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700">
+                      <tr>
+                          <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm">Return ID</th>
+                          <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm">Date & Time</th>
+                          <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm">Original Order</th>
+                          <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm">Items Returned</th>
+                          <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm">Refund Method</th>
+                          <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm text-right">Total Refunded</th>
+                      </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                      {filteredReturns.length === 0 ? (
+                          <tr><td colSpan={6} className="p-8 text-center text-slate-500 dark:text-slate-400">No return records found.</td></tr>
+                      ) : (
+                          filteredReturns.map(ret => {
+                              const originalSale = sales.find(s => s.id === ret.originalSaleId);
+                              return (
+                                  <tr key={ret.id} className="border-b border-slate-100 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
+                                      <td className="p-4 font-mono text-xs text-slate-600 dark:text-slate-400">#{ret.id.split('-')[1]}</td>
+                                      <td className="p-4 text-sm text-slate-600 dark:text-slate-300">
+                                          {new Date(ret.timestamp).toLocaleDateString()}
+                                          <div className="text-xs text-slate-400">{new Date(ret.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
+                                      </td>
+                                      <td className="p-4 text-sm font-medium text-slate-800 dark:text-white">
+                                          <div className="flex flex-col">
+                                              <span>#{ret.originalSaleId.split('-')[1]}</span>
+                                              <span className="text-xs font-normal text-slate-500">{originalSale?.customerName || 'Guest'}</span>
+                                          </div>
+                                      </td>
+                                      <td className="p-4 text-sm text-slate-600 dark:text-slate-300">
+                                          <div className="flex flex-col gap-1">
+                                              {ret.items.map((item, idx) => (
+                                                  <span key={idx} className="text-xs bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 px-1.5 py-0.5 rounded w-fit">
+                                                      {item.quantity}x {item.productName}
+                                                  </span>
+                                              ))}
+                                          </div>
+                                      </td>
+                                      <td className="p-4 text-sm">
+                                          <div className="flex items-center text-slate-600 dark:text-slate-300">
+                                              {getPaymentIcon(ret.refundMethod)} {ret.refundMethod.replace('_', ' ')}
+                                          </div>
+                                      </td>
+                                      <td className="p-4 text-right">
+                                          <div className="font-bold text-red-600 dark:text-red-400">-{symbol}{ret.totalRefund.toFixed(2)}</div>
+                                      </td>
+                                  </tr>
+                              );
+                          })
+                      )}
+                  </tbody>
+              </table>
+          </div>
+      )}
 
       {/* Sales Details Modal */}
       {selectedSale && (

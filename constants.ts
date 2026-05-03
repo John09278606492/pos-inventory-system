@@ -75,7 +75,8 @@ export const INITIAL_CUSTOMERS: Customer[] = [
     visitCount: 5,
     lastVisit: Date.now() - 1000 * 60 * 60 * 24 * 3, // 3 days ago
     storeCredit: 0,
-    type: 'MEMBER'
+    type: 'MEMBER',
+    creditLimit: 500
   },
   {
     id: 'c2',
@@ -86,7 +87,8 @@ export const INITIAL_CUSTOMERS: Customer[] = [
     visitCount: 12,
     lastVisit: Date.now() - 1000 * 60 * 60 * 24 * 1, // 1 day ago
     storeCredit: 50.00,
-    type: 'MEMBER'
+    type: 'MEMBER',
+    creditLimit: 1000
   },
   {
     id: 'c3',
@@ -97,7 +99,8 @@ export const INITIAL_CUSTOMERS: Customer[] = [
     visitCount: 2,
     lastVisit: Date.now() - 1000 * 60 * 60 * 24 * 15, // 15 days ago
     storeCredit: 0,
-    type: 'MEMBER'
+    type: 'MEMBER',
+    creditLimit: 10000
   }
 ];
 

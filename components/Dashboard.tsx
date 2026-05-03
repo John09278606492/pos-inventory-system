@@ -382,7 +382,7 @@ const Dashboard: React.FC<DashboardProps> = ({ sales, products, returns, currenc
                 <p key={i} className="mb-2 text-sm">{line}</p>
              ))}
           </div>
-          <p className="text-xs text-indigo-200 mt-4 opacity-75 text-center">Powered by Google Gemini 2.5 Flash</p>
+          <p className="text-xs text-indigo-200 mt-4 opacity-75 text-center">Powered by Google Gemini 3 Flash</p>
       </div>
     </div>
   );

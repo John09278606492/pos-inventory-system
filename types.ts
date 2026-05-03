@@ -1,4 +1,3 @@
-
 export enum UserRole {
   SUPER_ADMIN = 'SUPER_ADMIN',
   ADMIN = 'ADMIN',
@@ -21,7 +20,7 @@ export interface User {
   role: UserRole;
   email: string;
   avatar?: string;
-  password?: string; // Optional for type compatibility, enforced in logic
+  password?: string;
   permissions: Permission[];
 }
 
@@ -33,9 +32,9 @@ export interface ToastMessage {
 
 export interface CreditTerm {
   id: string;
-  name: string; // e.g., "Net 30"
-  days: number; // e.g., 30
-  rate: number; // e.g., 5 (%)
+  name: string;
+  days: number;
+  rate: number;
 }
 
 export interface StoreSettings {
@@ -44,20 +43,23 @@ export interface StoreSettings {
   storePhone: string;
   storeEmail: string;
   storeLogo?: string;
-  taxRate: number; // percentage
-  taxName: string; // e.g. "VAT"
+  taxRate: number;
+  taxName: string;
   taxType: 'INCLUSIVE' | 'EXCLUSIVE'; 
   currency: string;
   receiptHeader?: string;
   receiptFooter?: string;
-  creditMarkupRate?: number; // Legacy/Fallback
-  creditTerms: CreditTerm[]; // New: List of dynamic terms
+  creditMarkupRate?: number;
+  creditTerms: CreditTerm[];
 }
 
 export interface Product {
   id: string;
   name: string;
   sku: string;
+  barcode?: string;
+  brand?: string;
+  supplier?: string;
   price: number;
   cost: number;
   stock: number;
@@ -68,6 +70,7 @@ export interface Product {
   minStockLevel: number;
   stockExpiryDate?: string;
   allowDecimal?: boolean;
+  isActive?: boolean;
 }
 
 export interface Customer {
@@ -80,6 +83,7 @@ export interface Customer {
   lastVisit?: number;
   storeCredit: number;
   type: 'MEMBER' | 'WALK_IN';
+  creditLimit?: number;
 }
 
 export interface CustomerSegment {
@@ -112,24 +116,17 @@ export interface Sale {
   id: string;
   timestamp: number;
   items: SaleItem[];
-  
-  // Financials
   subTotal: number; 
   totalTax: number; 
   totalAmount: number; 
   totalProfit: number;
-  
-  // Tax Snapshot 
   taxName?: string;
   taxRate?: number;
   taxType?: 'INCLUSIVE' | 'EXCLUSIVE';
-
-  // Credit Markup Snapshot
   creditMarkupRate?: number;
   creditMarkupAmount?: number;
-  creditTermName?: string; // New: Name of the term selected (e.g. "Net 30")
-  creditDueDate?: number;  // New: Timestamp of due date
-
+  creditTermName?: string;
+  creditDueDate?: number;
   cashierId: string;
   customerId?: string;
   customerName?: string;

@@ -1,7 +1,7 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Product, StockAdjustment, AdjustmentType, User, ReturnTransaction, Customer, Sale, PriceHistory } from '../types';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Product, StockAdjustment, User, ReturnTransaction, Sale, Customer, PriceHistory, UserRole } from '../types';
+import { Search, Plus, Filter, Package, AlertTriangle, Edit2, Trash2, Activity, ChevronDown, History, RefreshCw, Save, X, Sparkles, TrendingUp, DollarSign, FileText, ChevronRight, ArrowRight, User as UserIcon, Image as ImageIcon, Tag, TrendingDown, RotateCcw, CheckSquare, Square, Printer, Layers, Barcode, SlidersHorizontal, Calendar, Info, Box, Download } from 'lucide-react';
 import { generateProductDescription, suggestRestock } from '../services/geminiService';
-import { Plus, Edit2, Trash2, Search, Wand2, RefreshCw, AlertCircle, AlertTriangle, CheckCircle, ClipboardEdit, History, X, ArrowRight, RotateCcw, ClipboardList, Filter, ArrowUp, ArrowDown, ChevronsUpDown, XCircle, ChevronDown, Check, TrendingUp, DollarSign, BarChart3, Package, Eye, Tags, ArrowBigUp, ArrowBigDown, Printer, FileSpreadsheet, Upload, Image as ImageIcon, ArrowRightLeft, Boxes, Scale, CheckSquare, Layers } from 'lucide-react';
 
 interface InventoryProps {
   products: Product[];
@@ -19,71 +19,111 @@ interface InventoryProps {
   onLogPriceChange: (log: PriceHistory) => void;
 }
 
-type SortField = 'name' | 'sku' | 'category' | 'price' | 'stock' | 'stockExpiryDate' | 'cost' | 'margin';
-type SortDirection = 'asc' | 'desc';
+// Simple Barcode Component for Labels
+const LabelBarcode = ({ value }: { value: string }) => {
+    // Deterministic visual representation based on string hash
+    const bars = [];
+    let hash = 0;
+    for (let i = 0; i < value.length; i++) {
+        hash = ((hash << 5) - hash) + value.charCodeAt(i);
+        hash |= 0;
+    }
+    const seededRandom = () => {
+        const x = Math.sin(hash++) * 10000;
+        return x - Math.floor(x);
+    };
+    // Generate 25 bars
+    for(let i=0; i<25; i++) {
+        const r = seededRandom();
+        let w = 4; 
+        if (r > 0.7) w = 8;
+        else if (r < 0.3) w = 2;
+        bars.push(w);
+    }
+    return (
+        <div className="flex flex-col items-center justify-center w-full">
+            <div className="flex justify-center h-8 overflow-hidden">
+                {bars.map((w, i) => (
+                    <div key={i} style={{ 
+                        width: `${w}px`, 
+                        height: '100%', 
+                        backgroundColor: 'black', 
+                        marginLeft: '1px', 
+                        marginRight: '1px' 
+                    }}></div>
+                ))}
+            </div>
+            <div className="text-[10px] font-mono tracking-widest uppercase mt-0.5 text-black">{value}</div>
+        </div>
+    );
+};
 
-const Inventory: React.FC<InventoryProps> = ({ products, setProducts, stockAdjustments, onAdjustStock, onBulkAdjustStock, currentUser, currency, showToast, returns, customers, sales, priceHistory, onLogPriceChange }) => {
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+const Inventory: React.FC<InventoryProps> = ({
+  products,
+  setProducts,
+  onAdjustStock,
+  onBulkAdjustStock,
+  currentUser,
+  currency,
+  showToast,
+  stockAdjustments,
+  onLogPriceChange,
+  priceHistory,
+  returns,
+  sales
+}) => {
+  // Search & Filter State
+  const [searchTerm, setSearchTerm] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+  const [activeFilters, setActiveFilters] = useState({
+      categories: [] as string[],
+      suppliers: [] as string[],
+      stockRange: { min: '' as string | number, max: '' as string | number }
+  });
   
   // Selection State
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  // Search & Filter State
-  const [searchTerm, setSearchTerm] = useState('');
-  const [isFilterOpen, setIsFilterOpen] = useState(false);
-  const [filterCategory, setFilterCategory] = useState('ALL');
-  const [filterStockStatus, setFilterStockStatus] = useState<'ALL' | 'LOW' | 'OUT' | 'IN'>('ALL');
-  const [filterExpiry, setFilterExpiry] = useState<'ALL' | 'EXPIRED' | 'SOON' | 'VALID'>('ALL');
-
-  // Sorting State
-  const [sortField, setSortField] = useState<SortField>('name');
-  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
-
-  const [aiSuggestions, setAiSuggestions] = useState<any[]>([]);
-  const [isLoadingAi, setIsLoadingAi] = useState(false);
-
-  // Adjustment State
+  // Modals
+  const [isProductModalOpen, setIsProductModalOpen] = useState(false);
   const [isAdjModalOpen, setIsAdjModalOpen] = useState(false);
-  const [selectedProductForAdj, setSelectedProductForAdj] = useState<Product | null>(null);
-  const [adjType, setAdjType] = useState<AdjustmentType>('ADD');
-  const [adjQuantity, setAdjQuantity] = useState(0);
-  const [adjReason, setAdjReason] = useState('Stock Count Correction');
-  const [adjNotes, setAdjNotes] = useState('');
-
-  // Bulk Adjustment State
-  const [isBulkAdjModalOpen, setIsBulkAdjModalOpen] = useState(false);
-  const [bulkAdjType, setBulkAdjType] = useState<AdjustmentType>('ADD');
-  const [bulkAdjQuantity, setBulkAdjQuantity] = useState(0);
-  const [bulkAdjReason, setBulkAdjReason] = useState('Stock Count Correction');
-  const [bulkAdjNotes, setBulkAdjNotes] = useState('');
-
-  // Conversion State
-  const [isConversionModalOpen, setIsConversionModalOpen] = useState(false);
-  const [convSourceId, setConvSourceId] = useState('');
-  const [convTargetId, setConvTargetId] = useState('');
-  const [convSourceQty, setConvSourceQty] = useState(1);
-  const [convTargetQty, setConvTargetQty] = useState(1);
-
-  // Detailed View State
-  const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
-  const [selectedProductDetails, setSelectedProductDetails] = useState<Product | null>(null);
-  const [historyFilterType, setHistoryFilterType] = useState<AdjustmentType | 'ALL'>('ALL');
-  const [historyStartDate, setHistoryStartDate] = useState('');
-  const [historyEndDate, setHistoryEndDate] = useState('');
-  const [historyView, setHistoryView] = useState<'ADJUSTMENTS' | 'RETURNS' | 'PRICE'>('ADJUSTMENTS');
-
-  // Category & Unit Dropdown State
-  const [isCategoryDropdownOpen, setIsCategoryDropdownOpen] = useState(false);
-  const categoryDropdownRef = useRef<HTMLDivElement>(null);
+  const [isInsightsOpen, setIsInsightsOpen] = useState(false);
+  const [isDetailOpen, setIsDetailOpen] = useState(false); // Renamed from isHistoryOpen
+  const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
+  const [isBulkPrintOpen, setIsBulkPrintOpen] = useState(false);
+  const [activeHistoryTab, setActiveHistoryTab] = useState<'STOCK' | 'PRICE' | 'RETURNS'>('STOCK');
   
-  const [isUnitDropdownOpen, setIsUnitDropdownOpen] = useState(false);
-  const unitDropdownRef = useRef<HTMLDivElement>(null);
+  // Dropdown state for category input
+  const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
+  
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [detailProduct, setDetailProduct] = useState<Product | null>(null); // Renamed from historyProduct
 
-  // Form State
-  const [formData, setFormData] = useState<Partial<Product>>({
-    name: '', sku: '', price: 0, cost: 0, stock: 0, unit: '', category: '', description: '', minStockLevel: 5, stockExpiryDate: '', imageUrl: '', allowDecimal: false
+  // Forms
+  const [productForm, setProductForm] = useState<Partial<Product>>({
+    name: '', sku: '', barcode: '', category: '', price: 0, cost: 0, stock: 0, minStockLevel: 5, unit: 'pcs', description: '', imageUrl: '', stockExpiryDate: '', supplier: ''
   });
+  
+  const [adjForm, setAdjForm] = useState({
+      quantity: 0,
+      type: 'ADD' as 'ADD' | 'REMOVE' | 'SET',
+      reason: '',
+      notes: ''
+  });
+
+  // Bulk Edit Form
+  const [bulkEditForm, setBulkEditForm] = useState<{
+      category: string;
+      minStockLevel: string;
+      supplier: string;
+      priceAdjustment: string; // Percentage (+10, -5)
+  }>({ category: '', minStockLevel: '', supplier: '', priceAdjustment: '' });
+
+  // AI State
+  const [isGeneratingDesc, setIsGeneratingDesc] = useState(false);
+  const [restockSuggestions, setRestockSuggestions] = useState<any[]>([]);
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
 
   const getCurrencySymbol = (code: string) => {
     switch(code) {
@@ -93,2287 +133,1164 @@ const Inventory: React.FC<InventoryProps> = ({ products, setProducts, stockAdjus
       default: return '$';
     }
   };
-  
   const symbol = getCurrencySymbol(currency);
-  const formatCurrency = (val: number) => val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const formatNumber = (val: number) => val.toLocaleString('en-US', { maximumFractionDigits: 3 });
 
-  const categories = useMemo(() => {
-      const cats = new Set(products.map(p => p.category).filter(Boolean));
-      return ['ALL', ...Array.from(cats).sort()];
-  }, [products]);
+  // Derived Lists for Filters
+  const uniqueCategories = useMemo(() => Array.from(new Set(products.map(p => p.category).filter(Boolean))).sort(), [products]);
+  const uniqueSuppliers = useMemo(() => Array.from(new Set(products.map(p => p.supplier).filter(Boolean) as string[])).sort(), [products]);
+  
+  // Input suggestions for Add/Edit Modal
+  const inputSuggestions = ['All', ...uniqueCategories].filter(c => c !== 'All').sort();
 
-  // Unique categories for the dropdown (excluding ALL)
-  const uniqueCategories = useMemo(() => {
-      const cats = new Set(products.map(p => p.category).filter(Boolean));
-      return Array.from(cats).sort();
-  }, [products]);
-
-  // Unique units for the dropdown
-  const uniqueUnits = useMemo(() => {
-      const productUnits = new Set(products.map(p => p.unit).filter(Boolean) as string[]);
-      const defaultUnits = ['pcs', 'kg', 'g', 'mg', 'l', 'ml', 'box', 'pack', 'sack', 'bottle', 'can', 'jar', 'm', 'cm', 'roll', 'set', 'pair', 'dozen', 'bundle', 'tray'];
-      defaultUnits.forEach(u => productUnits.add(u));
-      return Array.from(productUnits).sort();
-  }, [products]);
-
-  // Total Calculations for Top Cards
-  const totalItems = products.reduce((acc, p) => acc + p.stock, 0);
-  const totalValueRetail = products.reduce((acc, p) => acc + (p.price * p.stock), 0);
-  const totalValueCost = products.reduce((acc, p) => acc + (p.cost * p.stock), 0);
-
-  // Click outside to close dropdowns
-  useEffect(() => {
-      const handleClickOutside = (event: MouseEvent) => {
-          if (categoryDropdownRef.current && !categoryDropdownRef.current.contains(event.target as Node)) {
-              setIsCategoryDropdownOpen(false);
-          }
-          if (unitDropdownRef.current && !unitDropdownRef.current.contains(event.target as Node)) {
-              setIsUnitDropdownOpen(false);
-          }
-      };
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  const handleOpenModal = (product?: Product) => {
-    if (product) {
-      setEditingProduct(product);
-      setFormData(product);
-    } else {
-      setEditingProduct(null);
-      setFormData({
-         name: '', sku: '', price: 0, cost: 0, stock: 0, unit: 'pcs', category: '', description: '', minStockLevel: 5, stockExpiryDate: '', imageUrl: '', allowDecimal: false
-      });
-    }
-    setIsModalOpen(true);
-    setIsCategoryDropdownOpen(false);
-    setIsUnitDropdownOpen(false);
-  };
-
-  const handleOpenAdjModal = (product: Product) => {
-      setSelectedProductForAdj(product);
-      setAdjType('ADD');
-      setAdjQuantity(0);
-      setAdjReason('Stock Count Correction');
-      setAdjNotes('');
-      setIsAdjModalOpen(true);
-  }
-
-  const handleOpenConversionModal = () => {
-      setConvSourceId('');
-      setConvTargetId('');
-      setConvSourceQty(1);
-      setConvTargetQty(1);
-      setIsConversionModalOpen(true);
-  };
-
-  const handleOpenDetails = (product: Product) => {
-      setSelectedProductDetails(product);
-      // Reset filters & view
-      setHistoryFilterType('ALL');
-      setHistoryStartDate('');
-      setHistoryEndDate('');
-      setHistoryView('ADJUSTMENTS');
-      setIsDetailsModalOpen(true);
-  }
-
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 2 * 1024 * 1024) { // 2MB Limit
-         showToast("Image too large. Please use an image under 2MB.", 'ERROR');
-         return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setFormData(prev => ({ ...prev, imageUrl: reader.result as string }));
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const handleSubmitAdjustment = () => {
-      if (!selectedProductForAdj) return;
-
-      let newStock = selectedProductForAdj.stock;
+  // Filter Logic
+  const filteredProducts = products.filter(p => {
+      const matchSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          p.sku.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          (p.barcode && p.barcode.includes(searchTerm));
       
-      // Calculate new stock with float precision if needed
-      if (adjType === 'ADD') newStock = parseFloat((selectedProductForAdj.stock + adjQuantity).toFixed(3));
-      if (adjType === 'REMOVE') newStock = parseFloat((selectedProductForAdj.stock - adjQuantity).toFixed(3));
-      if (adjType === 'SET') newStock = adjQuantity;
-
-      // Prevent negative stock unless desired, for now block it
-      if (newStock < 0) {
-          showToast("Stock cannot be negative.", 'ERROR');
-          return;
-      }
-
-      const adjustment: StockAdjustment = {
-          id: `adj-${Date.now()}`,
-          productId: selectedProductForAdj.id,
-          productName: selectedProductForAdj.name,
-          userId: currentUser.id,
-          userName: currentUser.name,
-          timestamp: Date.now(),
-          type: adjType,
-          quantity: adjQuantity,
-          previousStock: selectedProductForAdj.stock,
-          newStock: newStock,
-          reason: adjReason,
-          notes: adjNotes
-      };
-
-      onAdjustStock(adjustment);
-      setIsAdjModalOpen(false);
-  }
-
-  const handleBulkSubmit = () => {
-      if (bulkAdjQuantity <= 0 && bulkAdjType !== 'SET') {
-          showToast("Quantity must be greater than zero.", 'ERROR');
-          return;
-      }
-      if (bulkAdjType === 'SET' && bulkAdjQuantity < 0) {
-          showToast("Stock cannot be negative.", 'ERROR');
-          return;
-      }
-
-      const timestamp = Date.now();
-      const adjustments: StockAdjustment[] = [];
-
-      selectedIds.forEach(id => {
-          const product = products.find(p => p.id === id);
-          if (!product) return;
-
-          let delta = bulkAdjQuantity;
-          let newStock = product.stock;
-
-          // If product doesn't allow decimal, floor the delta for operations to avoid fractional stocks
-          // For SET, we just use the rounded quantity
-          const qty = product.allowDecimal ? delta : Math.round(delta);
-
-          if (bulkAdjType === 'ADD') {
-              newStock = parseFloat((product.stock + qty).toFixed(3));
-          } else if (bulkAdjType === 'REMOVE') {
-              newStock = parseFloat((product.stock - qty).toFixed(3));
-          } else if (bulkAdjType === 'SET') {
-              newStock = qty;
-          }
-
-          if (newStock < 0) newStock = 0; // Prevent negative stock
-
-          adjustments.push({
-              id: `adj-bulk-${id}-${timestamp}`,
-              productId: product.id,
-              productName: product.name,
-              userId: currentUser.id,
-              userName: currentUser.name,
-              timestamp: timestamp,
-              type: bulkAdjType,
-              quantity: qty,
-              previousStock: product.stock,
-              newStock: newStock,
-              reason: bulkAdjReason,
-              notes: bulkAdjNotes ? `[Bulk] ${bulkAdjNotes}` : '[Bulk Update]'
-          });
-      });
-
-      onBulkAdjustStock(adjustments);
-      setIsBulkAdjModalOpen(false);
-      setSelectedIds(new Set()); // Clear selection
-      setBulkAdjQuantity(0);
-      setBulkAdjNotes('');
-  };
-
-  const handleConvertStock = () => {
-      const sourceProd = products.find(p => p.id === convSourceId);
-      const targetProd = products.find(p => p.id === convTargetId);
-
-      if (!sourceProd || !targetProd) {
-          showToast("Please select both source and target products.", 'ERROR');
-          return;
-      }
-      if (sourceProd.id === targetProd.id) {
-          showToast("Source and target cannot be the same.", 'ERROR');
-          return;
-      }
-      if (convSourceQty <= 0) {
-          showToast("Source quantity must be greater than zero.", 'ERROR');
-          return;
-      }
-      if (convTargetQty <= 0) {
-          showToast("Target quantity must be greater than zero.", 'ERROR');
-          return;
-      }
-      if (sourceProd.stock < convSourceQty) {
-          showToast(`Insufficient stock in ${sourceProd.name}.`, 'ERROR');
-          return;
-      }
-
-      const timestamp = Date.now();
-
-      // 1. Remove from Source
-      const sourceAdj: StockAdjustment = {
-          id: `adj-conv-src-${timestamp}`,
-          productId: sourceProd.id,
-          productName: sourceProd.name,
-          userId: currentUser.id,
-          userName: currentUser.name,
-          timestamp: timestamp,
-          type: 'REMOVE',
-          quantity: convSourceQty,
-          previousStock: sourceProd.stock,
-          newStock: parseFloat((sourceProd.stock - convSourceQty).toFixed(3)),
-          reason: `Conversion to ${targetProd.name}`,
-          notes: `Repacked/Converted ${convSourceQty} units to ${convTargetQty} units of ${targetProd.name}`
-      };
-
-      // 2. Add to Target
-      const targetAdj: StockAdjustment = {
-          id: `adj-conv-tgt-${timestamp}`,
-          productId: targetProd.id,
-          productName: targetProd.name,
-          userId: currentUser.id,
-          userName: currentUser.name,
-          timestamp: timestamp, // same timestamp ensures logical grouping
-          type: 'ADD',
-          quantity: convTargetQty,
-          previousStock: targetProd.stock,
-          newStock: parseFloat((targetProd.stock + convTargetQty).toFixed(3)),
-          reason: `Conversion from ${sourceProd.name}`,
-          notes: `Repacked/Converted from ${convSourceQty} units of ${sourceProd.name}`
-      };
-
-      onAdjustStock(sourceAdj);
-      onAdjustStock(targetAdj);
+      const matchCategory = activeFilters.categories.length === 0 || activeFilters.categories.includes(p.category);
+      const matchSupplier = activeFilters.suppliers.length === 0 || (p.supplier && activeFilters.suppliers.includes(p.supplier));
       
-      showToast(`Successfully converted ${convSourceQty} ${sourceProd.name} to ${convTargetQty} ${targetProd.name}`, 'SUCCESS');
-      setIsConversionModalOpen(false);
-  };
+      const min = activeFilters.stockRange.min === '' ? -Infinity : Number(activeFilters.stockRange.min);
+      const max = activeFilters.stockRange.max === '' ? Infinity : Number(activeFilters.stockRange.max);
+      const matchStock = p.stock >= min && p.stock <= max;
 
-  const handleSave = () => {
-    if (!formData.name || !formData.price || !formData.category) {
-        showToast("Please fill in required fields (Name, Category, Price)", 'ERROR');
-        return; 
-    }
+      return matchSearch && matchCategory && matchSupplier && matchStock;
+  });
 
-    if (editingProduct) {
-      // Check for price/cost changes for history logging
-      if (formData.price !== editingProduct.price) {
-          onLogPriceChange({
-              id: `ph-${Date.now()}-price`,
-              productId: editingProduct.id,
-              type: 'PRICE',
-              oldValue: editingProduct.price,
-              newValue: formData.price || 0,
-              userId: currentUser.id,
-              userName: currentUser.name,
-              timestamp: Date.now()
-          });
-      }
-      if (formData.cost !== editingProduct.cost) {
-          onLogPriceChange({
-              id: `ph-${Date.now()}-cost`,
-              productId: editingProduct.id,
-              type: 'COST',
-              oldValue: editingProduct.cost,
-              newValue: formData.cost || 0,
-              userId: currentUser.id,
-              userName: currentUser.name,
-              timestamp: Date.now()
-          });
-      }
+  const hasActiveFilters = activeFilters.categories.length > 0 || activeFilters.suppliers.length > 0 || activeFilters.stockRange.min !== '' || activeFilters.stockRange.max !== '';
 
-      setProducts(prev => prev.map(p => p.id === editingProduct.id ? { ...p, ...formData } as Product : p));
-      showToast("Product updated successfully.", 'SUCCESS');
-    } else {
-      const newProduct: Product = {
-        id: `p-${Date.now()}`,
-        ...formData as Product
-      };
-      setProducts(prev => [...prev, newProduct]);
-      showToast("New product created.", 'SUCCESS');
-    }
-    setIsModalOpen(false);
-  };
-
-  const handleDelete = (id: string) => {
-    if (window.confirm('Are you sure you want to delete this product?')) {
-      setProducts(prev => prev.filter(p => p.id !== id));
-      showToast("Product deleted.", 'INFO');
-    }
-  };
-
-  const handleGenerateDescription = async () => {
-    if (!formData.name || !formData.category) {
-        showToast("Please enter a Name and Category first.", 'ERROR');
-        return;
-    }
-    const desc = await generateProductDescription(formData.name, formData.category);
-    setFormData(prev => ({ ...prev, description: desc }));
-    showToast("Description generated with AI.", 'SUCCESS');
-  };
-
-  const handleRestockCheck = async () => {
-      setIsLoadingAi(true);
-      const suggestions = await suggestRestock(products);
-      setAiSuggestions(suggestions);
-      setIsLoadingAi(false);
-      showToast("Inventory analyzed by AI.", 'SUCCESS');
-  }
-
-  const getDaysUntilExpiry = (dateString?: string) => {
-      if (!dateString) return null;
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      // Parse YYYY-MM-DD explicitly to avoid timezone issues
-      const [year, month, day] = dateString.split('-').map(Number);
-      const expiry = new Date(year, month - 1, day);
-      
-      const diffTime = expiry.getTime() - today.getTime();
-      return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  };
-
-  const getExpiryStatus = (days: number | null) => {
-      if (days === null) return 'NONE';
-      if (days < 0) return 'EXPIRED';
-      if (days <= 30) return 'WARNING';
-      return 'OK';
-  };
-
-  // --- Filtering & Sorting Logic ---
-
-  const handleSort = (field: SortField) => {
-      if (sortField === field) {
-          setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
-      } else {
-          setSortField(field);
-          setSortDirection('asc');
-      }
-  };
-
-  const processedProducts = useMemo(() => {
-      let filtered = products.filter(p => 
-        p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-        p.sku.toLowerCase().includes(searchTerm.toLowerCase())
-      );
-
-      // Category Filter
-      if (filterCategory !== 'ALL') {
-          filtered = filtered.filter(p => p.category === filterCategory);
-      }
-
-      // Stock Status Filter
-      if (filterStockStatus !== 'ALL') {
-          if (filterStockStatus === 'OUT') filtered = filtered.filter(p => p.stock === 0);
-          if (filterStockStatus === 'LOW') filtered = filtered.filter(p => p.stock > 0 && p.stock <= p.minStockLevel);
-          if (filterStockStatus === 'IN') filtered = filtered.filter(p => p.stock > p.minStockLevel);
-      }
-
-      // Expiry Filter
-      if (filterExpiry !== 'ALL') {
-          filtered = filtered.filter(p => {
-              const days = getDaysUntilExpiry(p.stockExpiryDate);
-              if (filterExpiry === 'EXPIRED') return days !== null && days < 0;
-              if (filterExpiry === 'SOON') return days !== null && days >= 0 && days <= 30;
-              if (filterExpiry === 'VALID') return days === null || days > 30;
-              return true;
-          });
-      }
-
-      // Sorting
-      return filtered.sort((a, b) => {
-          let valA: any = a[sortField];
-          let valB: any = b[sortField];
-
-          // Computed fields for sort
-          if (sortField === 'margin') {
-              valA = a.price > 0 ? ((a.price - a.cost) / a.price) : 0;
-              valB = b.price > 0 ? ((b.price - b.cost) / b.price) : 0;
+  const toggleFilterItem = (type: 'categories' | 'suppliers', value: string) => {
+      setActiveFilters(prev => {
+          const list = prev[type];
+          if (list.includes(value)) {
+              return { ...prev, [type]: list.filter(item => item !== value) };
+          } else {
+              return { ...prev, [type]: [...list, value] };
           }
-
-          // Handle special string cases for case-insensitive sort
-          if (typeof valA === 'string') valA = valA.toLowerCase();
-          if (typeof valB === 'string') valB = valB.toLowerCase();
-
-          // Handle Date strings
-          if (sortField === 'stockExpiryDate') {
-              valA = valA ? new Date(valA).getTime() : (sortDirection === 'asc' ? 9999999999999 : -1); // Push nulls to end
-              valB = valB ? new Date(valB).getTime() : (sortDirection === 'asc' ? 9999999999999 : -1);
-          }
-
-          if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
-          if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
-          return 0;
       });
+  };
 
-  }, [products, searchTerm, filterCategory, filterStockStatus, filterExpiry, sortField, sortDirection]);
+  const clearAllFilters = () => {
+      setActiveFilters({
+          categories: [],
+          suppliers: [],
+          stockRange: { min: '', max: '' }
+      });
+      setSearchTerm('');
+  };
 
-  // Selection Logic
+  // --- Selection Logic ---
   const handleSelectAll = () => {
-      if (selectedIds.size === processedProducts.length && processedProducts.length > 0) {
+      if (selectedIds.size === filteredProducts.length) {
           setSelectedIds(new Set());
       } else {
-          setSelectedIds(new Set(processedProducts.map(p => p.id)));
+          setSelectedIds(new Set(filteredProducts.map(p => p.id)));
       }
   };
 
   const handleSelectRow = (id: string) => {
       const newSet = new Set(selectedIds);
-      if (newSet.has(id)) newSet.delete(id);
-      else newSet.add(id);
+      if (newSet.has(id)) {
+          newSet.delete(id);
+      } else {
+          newSet.add(id);
+      }
       setSelectedIds(newSet);
   };
 
-  const handleOpenBulkModal = () => {
-      setBulkAdjType('ADD');
-      setBulkAdjQuantity(0);
-      setBulkAdjReason('Stock Count Correction');
-      setBulkAdjNotes('');
-      setIsBulkAdjModalOpen(true);
+  const handleOpenModal = (product?: Product) => {
+      if (product) {
+          setEditingProduct(product);
+          setProductForm(product);
+      } else {
+          setEditingProduct(null);
+          setProductForm({ name: '', sku: '', barcode: '', category: 'General', price: 0, cost: 0, stock: 0, minStockLevel: 5, unit: 'pcs', description: '', imageUrl: '', stockExpiryDate: '', supplier: '' });
+      }
+      setIsProductModalOpen(true);
+      setShowCategoryDropdown(false);
   };
 
-  // Derived stats for top banners
-  const expiringProducts = products.filter(p => {
-    const days = getDaysUntilExpiry(p.stockExpiryDate);
-    return days !== null && days >= 0 && days <= 30;
-  });
-
-  const expiredProducts = products.filter(p => {
-      const days = getDaysUntilExpiry(p.stockExpiryDate);
-      return days !== null && days < 0;
-  });
-
-  const lowStockProducts = products.filter(p => p.stock <= p.minStockLevel);
-
-  const reasons = [
-      'Stock Count Correction',
-      'Received Shipment',
-      'Damaged Goods',
-      'Expired Stock',
-      'Theft / Loss',
-      'Return to Vendor',
-      'Customer Return',
-      'Promotion / Demo',
-      'Other'
-  ];
-
-  // --- Financial Calculation Helper ---
-  const getProductFinancials = (p: Product) => {
-    let unitsSold = 0;
-    let revenue = 0;
-    let costOfGoodsSold = 0;
-
-    sales.forEach(sale => {
-        const item = sale.items.find(i => i.productId === p.id);
-        if (item) {
-            unitsSold += item.quantity;
-            revenue += (item.priceAtSale * item.quantity);
-            costOfGoodsSold += (item.costAtSale * item.quantity);
-        }
-    });
-
-    let unitsReturned = 0;
-    let refunded = 0;
-    let profitReversal = 0;
-
-    returns.forEach(ret => {
-        const item = ret.items.find(i => i.productId === p.id);
-        if (item) {
-            unitsReturned += item.quantity;
-            refunded += item.refundAmount;
-            const originalSale = sales.find(s => s.id === ret.originalSaleId);
-            const originalItem = originalSale?.items.find(i => i.productId === p.id);
-            if (originalItem) {
-                const unitProfit = originalItem.priceAtSale - originalItem.costAtSale;
-                profitReversal += (unitProfit * item.quantity);
-            }
-        }
-    });
-
-    const netProfit = (revenue - costOfGoodsSold) - profitReversal;
-
-    return {
-        unitsSold,
-        revenue,
-        unitsReturned,
-        refunded,
-        netProfit,
-        assetValue: p.cost * p.stock,
-        retailValue: p.price * p.stock
-    };
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setProductForm(prev => ({ ...prev, imageUrl: reader.result as string }));
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
-  // --- Print Preparation ---
-  const printCategories = useMemo(() => {
-    const cats: Record<string, Product[]> = {};
-    processedProducts.forEach(p => {
-        const c = p.category || 'Uncategorized';
-        if (!cats[c]) cats[c] = [];
-        cats[c].push(p);
-    });
-    return cats;
-  }, [processedProducts]);
+  const handleSaveProduct = () => {
+      if (!productForm.name || !productForm.sku || productForm.price === undefined) {
+          showToast("Name, SKU, and Price are required.", 'ERROR');
+          return;
+      }
 
-  const printTotals = useMemo(() => {
-    return processedProducts.reduce((acc, p) => {
-        const stats = getProductFinancials(p);
-        return {
-            stock: acc.stock + p.stock,
-            assetValue: acc.assetValue + stats.assetValue,
-            retailValue: acc.retailValue + stats.retailValue,
-            unitsSold: acc.unitsSold + stats.unitsSold,
-            revenue: acc.revenue + stats.revenue,
-            unitsReturned: acc.unitsReturned + stats.unitsReturned,
-            refunded: acc.refunded + stats.refunded,
-            netProfit: acc.netProfit + stats.netProfit
-        };
-    }, {
-        stock: 0, assetValue: 0, retailValue: 0, unitsSold: 0, revenue: 0, unitsReturned: 0, refunded: 0, netProfit: 0
-    });
-  }, [processedProducts, sales, returns]);
+      if (editingProduct) {
+          // Check for price change to log history
+          if (editingProduct.price !== productForm.price) {
+              onLogPriceChange({
+                  id: `ph-${Date.now()}`,
+                  productId: editingProduct.id,
+                  type: 'PRICE',
+                  oldValue: editingProduct.price,
+                  newValue: productForm.price!,
+                  userId: currentUser.id,
+                  userName: currentUser.name,
+                  timestamp: Date.now()
+              });
+          }
+          if (editingProduct.cost !== productForm.cost) {
+              onLogPriceChange({
+                  id: `ph-${Date.now()}-c`,
+                  productId: editingProduct.id,
+                  type: 'COST',
+                  oldValue: editingProduct.cost,
+                  newValue: productForm.cost!,
+                  userId: currentUser.id,
+                  userName: currentUser.name,
+                  timestamp: Date.now()
+              });
+          }
 
+          setProducts(prev => prev.map(p => p.id === editingProduct.id ? { ...p, ...productForm } as Product : p));
+          showToast("Product updated successfully.", 'SUCCESS');
+      } else {
+          const newProduct: Product = {
+              id: `p-${Date.now()}`,
+              ...productForm as Product
+          };
+          setProducts(prev => [...prev, newProduct]);
+          showToast("Product created successfully.", 'SUCCESS');
+      }
+      setIsProductModalOpen(false);
+  };
 
-  // --- Export & Print Handlers ---
+  const handleDelete = (id: string) => {
+      if (window.confirm("Are you sure you want to delete this product?")) {
+          setProducts(prev => prev.filter(p => p.id !== id));
+          showToast("Product deleted.", 'INFO');
+      }
+  };
 
-  const handlePrint = () => {
+  const handleOpenAdjModal = (product: Product) => {
+      setSelectedProduct(product);
+      setAdjForm({ quantity: 0, type: 'ADD', reason: '', notes: '' });
+      setIsAdjModalOpen(true);
+  };
+
+  const handleViewDetails = (product: Product) => {
+      setDetailProduct(product);
+      setActiveHistoryTab('STOCK');
+      setIsDetailOpen(true);
+  };
+
+  const handleSubmitAdjustment = () => {
+      if (!selectedProduct || adjForm.quantity < 0) return; // Allow 0 for SET, but usually checks > 0
+
+      let newStock = selectedProduct.stock;
+      if (adjForm.type === 'ADD') newStock += adjForm.quantity;
+      if (adjForm.type === 'REMOVE') newStock = Math.max(0, newStock - adjForm.quantity);
+      if (adjForm.type === 'SET') newStock = adjForm.quantity;
+
+      onAdjustStock({
+          id: `adj-${Date.now()}`,
+          productId: selectedProduct.id,
+          productName: selectedProduct.name,
+          userId: currentUser.id,
+          userName: currentUser.name,
+          timestamp: Date.now(),
+          type: adjForm.type,
+          quantity: adjForm.quantity,
+          previousStock: selectedProduct.stock,
+          newStock,
+          reason: adjForm.reason || 'Manual Adjustment',
+          notes: adjForm.notes
+      });
+      setIsAdjModalOpen(false);
+  };
+
+  const handleGenerateDescription = async () => {
+      if (!productForm.name || !productForm.category) {
+          showToast("Please enter product name and category first.", 'ERROR');
+          return;
+      }
+      setIsGeneratingDesc(true);
+      const desc = await generateProductDescription(productForm.name, productForm.category);
+      setProductForm(prev => ({ ...prev, description: desc }));
+      setIsGeneratingDesc(false);
+  };
+
+  const handleOpenInsights = async () => {
+      setIsInsightsOpen(true);
+      setIsLoadingSuggestions(true);
+      const suggestions = await suggestRestock(products);
+      setRestockSuggestions(suggestions);
+      setIsLoadingSuggestions(false);
+  };
+
+  const handleExportInventory = () => {
+      const dataToExport = selectedIds.size > 0 
+          ? products.filter(p => selectedIds.has(p.id)) 
+          : products;
+
+      const totalValueCost = dataToExport.reduce((sum, p) => sum + (p.cost * p.stock), 0);
+      const totalValueRetail = dataToExport.reduce((sum, p) => sum + (p.price * p.stock), 0);
+
+      // Create HTML Table for Excel
+      let tableContent = `
+          <tr style="height: 40px;"><td colspan="13" style="font-size: 16px; font-weight: bold; background-color: #e2e8f0; text-align: center; vertical-align: middle;">Inventory Export - ${new Date().toLocaleDateString()}</td></tr>
+          <tr>
+              <td colspan="3" style="font-weight: bold;">Total Items: ${dataToExport.length}</td>
+              <td colspan="3" style="font-weight: bold;">Total Cost Value: ${currency} ${totalValueCost.toFixed(2)}</td>
+              <td colspan="7" style="font-weight: bold;">Total Retail Value: ${currency} ${totalValueRetail.toFixed(2)}</td>
+          </tr>
+          <tr><td colspan="13"></td></tr>
+          <tr style="background-color: #1e293b; color: white; font-weight: bold;">
+              <th style="padding: 10px; border: 1px solid #ccc;">Product Name</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">SKU</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Barcode</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Category</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Supplier</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Stock Qty</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Unit</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Cost Price (${currency})</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Selling Price (${currency})</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Margin (%)</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Total Cost Val</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Total Retail Val</th>
+              <th style="padding: 10px; border: 1px solid #ccc;">Status</th>
+          </tr>
+      `;
+
+      dataToExport.forEach(p => {
+          const margin = p.price > 0 ? ((p.price - p.cost) / p.price) * 100 : 0;
+          const status = p.stock === 0 ? 'Out of Stock' : p.stock <= p.minStockLevel ? 'Low Stock' : 'Active';
+          const statusColor = p.stock === 0 ? '#fee2e2' : p.stock <= p.minStockLevel ? '#ffedd5' : '#ffffff'; // Light red, orange, white
+
+          tableContent += `
+              <tr style="background-color: ${statusColor};">
+                  <td style="border: 1px solid #ccc;">${p.name}</td>
+                  <td style="border: 1px solid #ccc; mso-number-format:'@'">${p.sku}</td>
+                  <td style="border: 1px solid #ccc; mso-number-format:'@'">${p.barcode || '-'}</td>
+                  <td style="border: 1px solid #ccc;">${p.category}</td>
+                  <td style="border: 1px solid #ccc;">${p.supplier || '-'}</td>
+                  <td style="border: 1px solid #ccc; font-weight: bold;">${p.stock}</td>
+                  <td style="border: 1px solid #ccc;">${p.unit || 'pcs'}</td>
+                  <td style="border: 1px solid #ccc;">${p.cost.toFixed(2)}</td>
+                  <td style="border: 1px solid #ccc;">${p.price.toFixed(2)}</td>
+                  <td style="border: 1px solid #ccc;">${margin.toFixed(1)}%</td>
+                  <td style="border: 1px solid #ccc;">${(p.cost * p.stock).toFixed(2)}</td>
+                  <td style="border: 1px solid #ccc;">${(p.price * p.stock).toFixed(2)}</td>
+                  <td style="border: 1px solid #ccc;">${status}</td>
+              </tr>
+          `;
+      });
+
+      const fullTemplate = `
+          <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+          <head>
+              <!--[if gte mso 9]>
+              <xml>
+                  <x:ExcelWorkbook>
+                      <x:ExcelWorksheets>
+                          <x:ExcelWorksheet>
+                              <x:Name>Inventory Export</x:Name>
+                              <x:WorksheetOptions>
+                                  <x:DisplayGridlines/>
+                              </x:WorksheetOptions>
+                          </x:ExcelWorksheet>
+                      </x:ExcelWorksheets>
+                  </x:ExcelWorkbook>
+              </xml>
+              <![endif]-->
+              <meta http-equiv="content-type" content="text/plain; charset=UTF-8"/>
+          </head>
+          <body>
+              <table>${tableContent}</table>
+          </body>
+          </html>
+      `;
+
+      const blob = new Blob([fullTemplate], { type: 'application/vnd.ms-excel' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Inventory_Export_${new Date().toISOString().split('T')[0]}.xls`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+      showToast("Inventory exported successfully!", "SUCCESS");
+  };
+
+  const getProductHistory = (productId: string) => {
+      return stockAdjustments
+          .filter(a => a.productId === productId)
+          .sort((a, b) => b.timestamp - a.timestamp);
+  };
+
+  const getProductPriceHistory = (productId: string) => {
+      return priceHistory
+          .filter(h => h.productId === productId)
+          .sort((a, b) => b.timestamp - a.timestamp);
+  };
+
+  const getProductReturnHistory = (productId: string) => {
+      return returns
+          .filter(r => r.items.some(i => i.productId === productId))
+          .sort((a, b) => b.timestamp - a.timestamp);
+  };
+
+  // --- Bulk Actions ---
+  const handleBulkEditSubmit = () => {
+      if (selectedIds.size === 0) return;
+
+      setProducts(prev => prev.map(p => {
+          if (!selectedIds.has(p.id)) return p;
+
+          const updated = { ...p };
+          if (bulkEditForm.category) updated.category = bulkEditForm.category;
+          if (bulkEditForm.supplier) updated.supplier = bulkEditForm.supplier;
+          if (bulkEditForm.minStockLevel) updated.minStockLevel = parseInt(bulkEditForm.minStockLevel);
+          if (bulkEditForm.priceAdjustment) {
+              const adjustment = parseFloat(bulkEditForm.priceAdjustment);
+              if (!isNaN(adjustment)) {
+                  updated.price = updated.price * (1 + (adjustment / 100));
+                  // Log price change for each
+                  onLogPriceChange({
+                      id: `ph-bulk-${Date.now()}-${p.id}`,
+                      productId: p.id,
+                      type: 'PRICE',
+                      oldValue: p.price,
+                      newValue: updated.price,
+                      userId: currentUser.id,
+                      userName: currentUser.name,
+                      timestamp: Date.now()
+                  });
+              }
+          }
+          return updated;
+      }));
+
+      showToast(`Updated ${selectedIds.size} products.`, 'SUCCESS');
+      setIsBulkEditOpen(false);
+      setSelectedIds(new Set());
+      setBulkEditForm({ category: '', minStockLevel: '', supplier: '', priceAdjustment: '' });
+  };
+
+  const handlePrintLabels = () => {
       window.print();
   };
 
-  const handleExport = () => {
-    // 1. Group products by category to create a hierarchy
-    const productsByCategory: Record<string, Product[]> = {};
-    processedProducts.forEach(p => {
-        const cat = p.category || 'Uncategorized';
-        if (!productsByCategory[cat]) productsByCategory[cat] = [];
-        productsByCategory[cat].push(p);
-    });
-
-    // 2. Define Columns with strict types for formatting
-    const columns = [
-         { header: 'Product Name', key: 'name' },
-         { header: 'SKU', key: 'sku' },
-         { header: 'Unit', key: 'unit' },
-         { header: 'Description', key: 'description' },
-         { header: 'Cost Price', key: 'cost', type: 'currency' },
-         { header: 'Selling Price', key: 'price', type: 'currency' },
-         { header: 'Margin %', key: 'margin', type: 'percent' },
-         { header: 'Stock', key: 'stock', type: 'number' },
-         { header: 'Status', key: 'status' },
-         { header: 'Asset Value', key: 'assetValue', type: 'currency' },
-         { header: 'Retail Value', key: 'retailValue', type: 'currency' },
-         { header: 'Units Sold', key: 'unitsSold', type: 'number' },
-         { header: 'Total Revenue', key: 'revenue', type: 'currency' },
-         { header: 'Units Returned', key: 'unitsReturned', type: 'number' },
-         { header: 'Total Refunded', key: 'refunded', type: 'currency' },
-         { header: 'Net Profit', key: 'netProfit', type: 'currency' },
-         { header: 'Expiry Date', key: 'expiry' }
-    ];
-
-    let tableRows = '';
-    
-    // 3. Build HTML Rows with Hierarchy
-    Object.keys(productsByCategory).sort().forEach(category => {
-        // Category Header Row (Hierarchy Level 1)
-        tableRows += `<tr style="background-color: #e0e7ff;">
-            <td colspan="${columns.length}" style="font-weight: bold; border: 1px solid #cbd5e1; padding: 10px; font-size: 14px; text-transform: uppercase;">${category}</td>
-        </tr>`;
-
-        productsByCategory[category].forEach(p => {
-            const stats = getProductFinancials(p);
-            const margin = p.price > 0 ? (((p.price - p.cost) / p.price) * 100).toFixed(2) : '0.00';
-            
-            let stockStatus = 'In Stock';
-            if (p.stock === 0) stockStatus = 'Out of Stock';
-            else if (p.stock <= p.minStockLevel) stockStatus = 'Low Stock';
-
-            const values: Record<string, any> = {
-                name: p.name,
-                sku: p.sku,
-                unit: p.unit || '',
-                description: p.description || '',
-                cost: p.cost,
-                price: p.price,
-                margin: margin,
-                stock: p.stock,
-                status: stockStatus,
-                assetValue: stats.assetValue,
-                retailValue: stats.retailValue,
-                unitsSold: stats.unitsSold,
-                revenue: stats.revenue,
-                unitsReturned: stats.unitsReturned,
-                refunded: stats.refunded,
-                netProfit: stats.netProfit,
-                expiry: p.stockExpiryDate || 'N/A'
-            };
-
-            // Product Row
-            tableRows += `<tr>
-                ${columns.map(col => {
-                    let val = values[col.key];
-                    let align = 'left';
-                    let bgColor = '#ffffff';
-                    
-                    if (col.type === 'currency') {
-                        val = typeof val === 'number' ? val.toFixed(2) : val;
-                        align = 'right';
-                    }
-                    if (col.type === 'number') {
-                         align = 'center';
-                    }
-                    if (col.type === 'percent') {
-                         val = val + '%';
-                         align = 'right';
-                    }
-                    
-                    // Specific highlighting
-                    if (col.key === 'netProfit') {
-                        bgColor = parseFloat(val) >= 0 ? '#ecfdf5' : '#fef2f2'; // Green or Red tint
-                    }
-
-                    return `<td style="border: 1px solid #e2e8f0; padding: 8px; text-align: ${align}; vertical-align: top; background-color: ${bgColor}; mso-number-format:${col.type === 'currency' ? '\\#\\,\\#\\#0\\.00' : '@'};">${val}</td>`;
-                }).join('')}
-            </tr>`;
-        });
-    });
-
-    // Append Grand Totals Row
-    tableRows += `<tr style="font-weight: bold; background-color: #f1f5f9; border-top: 2px solid #334155;">
-        <td colspan="7" style="border: 1px solid #cbd5e1; padding: 10px; text-align: right; text-transform: uppercase;">GRAND TOTALS</td>
-        <td style="border: 1px solid #cbd5e1; padding: 10px; text-align: center;">${printTotals.stock.toFixed(3).replace(/\.?0+$/, '')}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 10px;"></td>
-        <td style="border: 1px solid #cbd5e1; padding: 10px; text-align: right; mso-number-format:'\\#\\,\\#\\#0\\.00'">${printTotals.assetValue.toFixed(2)}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 10px; text-align: right; mso-number-format:'\\#\\,\\#\\#0\\.00'">${printTotals.retailValue.toFixed(2)}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 10px; text-align: center;">${printTotals.unitsSold.toFixed(3).replace(/\.?0+$/, '')}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 10px; text-align: right; mso-number-format:'\\#\\,\\#\\#0\\.00'">${printTotals.revenue.toFixed(2)}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 10px; text-align: center;">${printTotals.unitsReturned.toFixed(3).replace(/\.?0+$/, '')}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 10px; text-align: right; mso-number-format:'\\#\\,\\#\\#0\\.00'">${printTotals.refunded.toFixed(2)}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 10px; text-align: right; mso-number-format:'\\#\\,\\#\\#0\\.00'; color: ${printTotals.netProfit >= 0 ? 'green' : 'red'};">${printTotals.netProfit.toFixed(2)}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 10px;"></td>
-    </tr>`;
-
-    // 4. Construct complete HTML document for Excel
-    const htmlContent = `
-        <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
-        <head>
-            <meta charset="utf-8" />
-            <!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Detailed Inventory</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->
-            <style>
-                body { font-family: Arial, sans-serif; font-size: 12px; }
-                table { border-collapse: collapse; width: 100%; }
-                th { background-color: #f1f5f9; color: #334155; font-weight: bold; border: 1px solid #cbd5e1; padding: 10px; text-align: left; position: sticky; top: 0; }
-            </style>
-        </head>
-        <body>
-            <table>
-                <thead>
-                    <tr>
-                        ${columns.map(c => `<th style="text-align: ${c.type === 'currency' || c.type === 'percent' ? 'right' : (c.type === 'number' ? 'center' : 'left')}">${c.header}</th>`).join('')}
-                    </tr>
-                </thead>
-                <tbody>
-                    ${tableRows}
-                </tbody>
-            </table>
-        </body>
-        </html>
-    `;
-
-    // 5. Create Blob as XLS (Excel will interpret HTML table)
-    const blob = new Blob([htmlContent], { type: 'application/vnd.ms-excel' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `detailed_inventory_export_${new Date().toISOString().split('T')[0]}.xls`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  // History Filtering Logic
-  const getFilteredHistory = () => {
-    if (!selectedProductDetails) return [];
-    
-    return stockAdjustments.filter(a => {
-        if (a.productId !== selectedProductDetails.id) return false;
-        
-        // Type Filter
-        if (historyFilterType !== 'ALL' && a.type !== historyFilterType) return false;
-        
-        // Date Range Filter
-        if (historyStartDate) {
-            const start = new Date(historyStartDate).setHours(0,0,0,0);
-            if (a.timestamp < start) return false;
-        }
-        if (historyEndDate) {
-            const end = new Date(historyEndDate).setHours(23,59,59,999);
-            if (a.timestamp > end) return false;
-        }
-        
-        return true;
-    }).sort((a,b) => b.timestamp - a.timestamp);
-  };
-
-  // Get Product Returns Logic
-  const getProductReturns = () => {
-      if (!selectedProductDetails) return [];
-
-      return returns.flatMap(ret => {
-          const item = ret.items.find(i => i.productId === selectedProductDetails.id);
-          if (!item) return [];
-
-          const customerName = customers.find(c => c.id === ret.customerId)?.name || 'Guest';
-
-          return [{
-              ...item,
-              returnId: ret.id,
-              originalSaleId: ret.originalSaleId,
-              timestamp: ret.timestamp,
-              customerName,
-              refundMethod: ret.refundMethod
-          }];
-      }).sort((a, b) => b.timestamp - a.timestamp);
-  };
-
-  // Get Price History Logic
-  const getProductPriceHistory = () => {
-      if (!selectedProductDetails) return [];
-      return priceHistory
-        .filter(ph => ph.productId === selectedProductDetails.id)
-        .sort((a, b) => b.timestamp - a.timestamp);
-  };
-
-  const filteredHistory = getFilteredHistory();
-  const productReturns = getProductReturns();
-  const productPrices = getProductPriceHistory();
-
-  const getSourceProductForConv = () => products.find(p => p.id === convSourceId);
-  const isConvSourceQtyInvalid = getSourceProductForConv() ? convSourceQty > (getSourceProductForConv()?.stock || 0) : false;
+  const inputClass = "w-full p-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all placeholder-slate-400 dark:placeholder-slate-500";
 
   return (
     <div className="space-y-6">
-      <style>{`
+       
+       {/* Styles for Printing */}
+       <style>{`
         @media print {
-            @page { size: landscape; margin: 10mm; }
-            
-            html, body, #root, main, .flex, .flex-col, .overflow-hidden, .overflow-auto, .overflow-y-auto {
-                background-color: white !important;
-                height: auto !important;
-                width: 100% !important;
-                overflow: visible !important;
-                display: block !important;
-                position: static !important;
-            }
-
-            body * {
-                visibility: hidden;
-            }
-
-            .printable-area, .printable-area * {
-                visibility: visible !important;
-            }
-
-            .printable-area {
-                display: block !important;
-                position: absolute !important;
-                top: 0;
-                left: 0;
-                width: 100%;
+            body * { visibility: hidden; }
+            #print-area, #print-area * { visibility: visible; }
+            #print-area { 
+                position: absolute; 
+                left: 0; 
+                top: 0; 
+                width: 100%; 
                 margin: 0;
-                padding: 0;
+                padding: 20px;
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: 15px;
             }
-            
-            .no-print {
-                display: none !important;
+            .label-item {
+                border: 1px dashed #ccc;
+                padding: 10px;
+                text-align: center;
+                break-inside: avoid;
+                page-break-inside: avoid;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                height: 140px;
             }
-
-            table { width: 100%; border-collapse: collapse; }
-            th, td { 
-                border: 1px solid #000; 
-                padding: 4px 8px; 
-                font-size: 10pt; 
-                color: black;
-            }
-            th { background-color: #f0f0f0 !important; font-weight: bold; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-            .positive-profit { color: black !important; }
-            .negative-profit { color: black !important; font-style: italic; }
+            .no-print { display: none !important; }
         }
-      `}</style>
+       `}</style>
 
-      {/* ... Header and Action Buttons ... */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 no-print">
-        <h2 className="text-3xl font-bold text-slate-800 dark:text-white">Inventory</h2>
+       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h2 className="text-3xl font-bold text-slate-800 dark:text-white">Inventory</h2>
+          <p className="text-slate-500 text-sm mt-1">Manage products, stock levels, and pricing.</p>
+        </div>
         <div className="flex space-x-2">
             <button 
-                onClick={handlePrint}
-                className="bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 px-4 py-2 rounded-lg flex items-center transition shadow-sm"
-                title="Print Inventory"
+              onClick={handleExportInventory}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg flex items-center transition shadow-sm"
+              title="Export to Excel"
             >
-                <Printer size={18} />
+              <Download size={18} className="mr-2" /> Export XLS
             </button>
             <button 
-                onClick={handleExport}
-                className="bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 px-4 py-2 rounded-lg flex items-center transition shadow-sm"
-                title="Export Detailed Excel"
+              onClick={handleOpenInsights}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center transition shadow-sm"
             >
-                <FileSpreadsheet size={18} />
+              <Sparkles size={18} className="mr-2" /> AI Insights
             </button>
             <button 
-                onClick={handleOpenConversionModal}
-                className="bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-600 text-indigo-600 dark:text-indigo-400 px-4 py-2 rounded-lg flex items-center transition shadow-sm"
-                title="Convert Stock / Repack"
+              onClick={() => handleOpenModal()}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center transition shadow-sm"
             >
-                <Boxes size={18} className="mr-2"/> Convert
-            </button>
-            <button 
-                onClick={handleRestockCheck}
-                disabled={isLoadingAi}
-                className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg flex items-center transition shadow-sm"
-            >
-                <RefreshCw size={18} className={`mr-2 ${isLoadingAi ? 'animate-spin' : ''}`} />
-                {isLoadingAi ? 'Analyzing...' : 'AI Restock Check'}
-            </button>
-            <button 
-                onClick={() => handleOpenModal()}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center transition shadow-sm"
-            >
-                <Plus size={18} className="mr-2" /> Add Product
+              <Plus size={18} className="mr-2" /> Add Product
             </button>
         </div>
       </div>
 
-      {/* Overview Cards (Hidden on Print) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 no-print">
-          {/* ... Existing Cards ... */}
-          <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex items-center">
-              <div className="p-3 bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 rounded-full mr-4">
-                  <Tags size={24} />
-              </div>
-              <div>
-                  <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Unique Products</p>
-                  <p className="text-xl font-bold text-slate-800 dark:text-white">{products.length}</p>
-              </div>
-          </div>
-          <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex items-center">
-              <div className="p-3 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-full mr-4">
-                  <Package size={24} />
-              </div>
-              <div>
-                  <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Total Stock Units</p>
-                  <p className="text-xl font-bold text-slate-800 dark:text-white">{formatNumber(totalItems)}</p>
-              </div>
-          </div>
-          <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex items-center">
-              <div className="p-3 bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 rounded-full mr-4">
-                  <DollarSign size={24} />
-              </div>
-              <div>
-                  <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Total Value (Retail)</p>
-                  <p className="text-xl font-bold text-green-600 dark:text-green-400">{symbol}{formatCurrency(totalValueRetail)}</p>
-              </div>
-          </div>
-          <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex items-center">
-              <div className="p-3 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-full mr-4">
-                  <BarChart3 size={24} />
-              </div>
-              <div>
-                  <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase">Total Cost (Assets)</p>
-                  <p className="text-xl font-bold text-indigo-600 dark:text-indigo-400">{symbol}{formatCurrency(totalValueCost)}</p>
-              </div>
-          </div>
-      </div>
-
-      {/* Alerts */}
-      {(expiringProducts.length > 0 || expiredProducts.length > 0 || lowStockProducts.length > 0) && (
-        <div className="space-y-2 no-print">
-            {/* ... Alert Logic ... */}
-            {expiredProducts.length > 0 && (
-                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-4 rounded-lg flex items-start">
-                    <AlertCircle className="text-red-600 dark:text-red-400 mr-3 mt-0.5 shrink-0" size={20} />
-                    <div>
-                        <h4 className="font-semibold text-red-800 dark:text-red-300 mb-1">Critical: {expiredProducts.length} Products Expired</h4>
-                        <div className="text-sm text-red-700 dark:text-red-400">
-                             Remove expired items to maintain inventory quality.
-                        </div>
-                    </div>
-                </div>
-            )}
-            
-            {expiringProducts.length > 0 && (
-                <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-4 rounded-lg flex items-start">
-                    <AlertTriangle className="text-amber-600 dark:text-amber-400 mr-3 mt-0.5 shrink-0" size={20} />
-                    <div>
-                        <h4 className="font-semibold text-amber-800 dark:text-amber-300 mb-1">Attention: {expiringProducts.length} Products Expiring Soon</h4>
-                        <ul className="list-disc list-inside text-sm text-amber-700 dark:text-amber-400">
-                            {expiringProducts.slice(0, 3).map(p => (
-                                <li key={p.id}>
-                                    <span className="font-medium">{p.name}</span> expires in <span className="font-bold">{getDaysUntilExpiry(p.stockExpiryDate)} days</span>
-                                </li>
-                            ))}
-                            {expiringProducts.length > 3 && <li>...and {expiringProducts.length - 3} more</li>}
-                        </ul>
-                    </div>
-                </div>
-            )}
-
-            {lowStockProducts.length > 0 && (
-                <div className="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 p-4 rounded-lg flex items-start">
-                    <AlertCircle className="text-orange-600 dark:text-orange-400 mr-3 mt-0.5 shrink-0" size={20} />
-                    <div>
-                        <h4 className="font-semibold text-orange-800 dark:text-orange-300 mb-1">Stock Alert: {lowStockProducts.length} Items Low</h4>
-                        <ul className="list-disc list-inside text-sm text-orange-700 dark:text-orange-400">
-                            {lowStockProducts.slice(0, 3).map(p => (
-                                <li key={p.id}>
-                                    <span className="font-medium">{p.name}</span>: {p.stock} left (Threshold: {p.minStockLevel})
-                                </li>
-                            ))}
-                            {lowStockProducts.length > 3 && <li>...and {lowStockProducts.length - 3} more</li>}
-                        </ul>
-                    </div>
-                </div>
-            )}
-        </div>
-      )}
-
-      {/* AI Suggestions */}
-      {aiSuggestions.length > 0 && (
-          <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 p-4 rounded-lg no-print">
-              <h4 className="font-semibold text-purple-800 dark:text-purple-300 mb-2 flex items-center"><Wand2 size={16} className="mr-2"/> AI Restock Suggestions</h4>
-              <ul className="list-disc list-inside text-sm text-purple-700 dark:text-purple-400">
-                  {aiSuggestions.map((s, idx) => (
-                      <li key={idx}><strong>{s.productName}</strong>: {s.suggestedAction}</li>
-                  ))}
-              </ul>
-              <button onClick={() => setAiSuggestions([])} className="text-xs text-slate-500 dark:text-slate-400 underline mt-2">Dismiss</button>
-          </div>
-      )}
-
-      {/* Advanced Search & Filter Bar */}
-      <div className="flex flex-col gap-4 no-print">
-          <div className="flex gap-3">
-              <div className="relative flex-1">
+      <div className="flex flex-col gap-4">
+          <div className="bg-white dark:bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 flex flex-col md:flex-row gap-4 items-center">
+              <div className="relative flex-1 w-full">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" size={20} />
                 <input 
                   type="text" 
-                  placeholder="Search by name or SKU..." 
+                  placeholder="Search by Name, SKU, or Barcode..." 
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-800 dark:text-white shadow-sm placeholder-slate-400 dark:placeholder-slate-500"
+                  className="w-full pl-10 pr-4 py-2.5 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
                 />
               </div>
               <button 
-                onClick={() => setIsFilterOpen(!isFilterOpen)}
-                className={`px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 flex items-center shadow-sm transition
-                ${isFilterOpen ? 'bg-blue-50 dark:bg-slate-700 text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-500' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'}`}
+                  onClick={() => setShowFilters(!showFilters)}
+                  className={`flex items-center px-4 py-2.5 rounded-lg border transition-colors ${showFilters || hasActiveFilters ? 'bg-blue-50 border-blue-200 text-blue-700 dark:bg-blue-900/30 dark:border-blue-800 dark:text-blue-300' : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50 dark:bg-slate-900 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800'}`}
               >
-                  <Filter size={20} className="mr-2"/> Filters
-                  {(filterCategory !== 'ALL' || filterStockStatus !== 'ALL' || filterExpiry !== 'ALL') && (
-                      <span className="ml-2 w-2 h-2 rounded-full bg-blue-500"></span>
-                  )}
+                  <SlidersHorizontal size={18} className="mr-2" /> Filters {hasActiveFilters && <span className="ml-1 w-2 h-2 bg-blue-600 rounded-full animate-pulse"></span>}
               </button>
           </div>
 
-          {/* Collapsible Filter Panel */}
-          {isFilterOpen && (
-              <div className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm animate-fade-in">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 items-end">
-                      {/* ... Filters Content ... */}
-                      <div>
-                          <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Category</label>
-                          <select 
-                            value={filterCategory}
-                            onChange={(e) => setFilterCategory(e.target.value)}
-                            className="w-full p-2.5 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                          >
-                              {categories.map(c => <option key={c} value={c}>{c}</option>)}
-                          </select>
+          {/* Expanded Filters Panel */}
+          {showFilters && (
+              <div className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-inner border border-slate-200 dark:border-slate-700 grid grid-cols-1 md:grid-cols-3 gap-6 animate-in slide-in-from-top-2 duration-200">
+                  <div>
+                      <h4 className="font-bold text-sm text-slate-700 dark:text-slate-300 mb-3 flex items-center"><Tag size={16} className="mr-2"/> Categories</h4>
+                      <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto pr-2 custom-scrollbar">
+                          {uniqueCategories.map(cat => (
+                              <button 
+                                  key={cat} 
+                                  onClick={() => toggleFilterItem('categories', cat)}
+                                  className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${activeFilters.categories.includes(cat) ? 'bg-blue-600 text-white border-blue-600' : 'bg-slate-50 dark:bg-slate-700 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-600 hover:border-blue-300'}`}
+                              >
+                                  {cat}
+                              </button>
+                          ))}
                       </div>
-                      <div>
-                          <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Stock Status</label>
-                          <select 
-                            value={filterStockStatus}
-                            onChange={(e) => setFilterStockStatus(e.target.value as any)}
-                            className="w-full p-2.5 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                          >
-                              <option value="ALL">All Status</option>
-                              <option value="IN">In Stock</option>
-                              <option value="LOW">Low Stock</option>
-                              <option value="OUT">Out of Stock</option>
-                          </select>
-                      </div>
-                      <div>
-                          <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Expiry Status</label>
-                          <select 
-                            value={filterExpiry}
-                            onChange={(e) => setFilterExpiry(e.target.value as any)}
-                            className="w-full p-2.5 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-800 dark:text-white outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                          >
-                              <option value="ALL">All Dates</option>
-                              <option value="VALID">Valid</option>
-                              <option value="SOON">Expiring Soon (30d)</option>
-                              <option value="EXPIRED">Expired</option>
-                          </select>
-                      </div>
-                      <button 
-                        onClick={() => {
-                            setFilterCategory('ALL');
-                            setFilterStockStatus('ALL');
-                            setFilterExpiry('ALL');
-                            setSearchTerm('');
-                        }}
-                        className="px-4 py-2.5 rounded-lg text-sm font-medium text-red-500 hover:bg-red-50 dark:hover:bg-slate-700 transition flex items-center justify-center"
-                      >
-                          <XCircle size={16} className="mr-2"/> Clear All
-                      </button>
                   </div>
+                  <div>
+                      <h4 className="font-bold text-sm text-slate-700 dark:text-slate-300 mb-3 flex items-center"><Package size={16} className="mr-2"/> Suppliers</h4>
+                      <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto pr-2 custom-scrollbar">
+                          {uniqueSuppliers.length === 0 ? <span className="text-xs text-slate-400 italic">No suppliers found</span> : uniqueSuppliers.map(sup => (
+                              <button 
+                                  key={sup} 
+                                  onClick={() => toggleFilterItem('suppliers', sup)}
+                                  className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${activeFilters.suppliers.includes(sup) ? 'bg-purple-600 text-white border-purple-600' : 'bg-slate-50 dark:bg-slate-700 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-600 hover:border-purple-300'}`}
+                              >
+                                  {sup}
+                              </button>
+                          ))}
+                      </div>
+                  </div>
+                  <div>
+                      <h4 className="font-bold text-sm text-slate-700 dark:text-slate-300 mb-3 flex items-center"><Activity size={16} className="mr-2"/> Stock Range</h4>
+                      <div className="flex items-center gap-2">
+                          <input 
+                              type="number" 
+                              placeholder="Min" 
+                              value={activeFilters.stockRange.min}
+                              onChange={(e) => setActiveFilters({...activeFilters, stockRange: { ...activeFilters.stockRange, min: e.target.value }})}
+                              className="w-full p-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-900 dark:text-white"
+                          />
+                          <span className="text-slate-400">-</span>
+                          <input 
+                              type="number" 
+                              placeholder="Max" 
+                              value={activeFilters.stockRange.max}
+                              onChange={(e) => setActiveFilters({...activeFilters, stockRange: { ...activeFilters.stockRange, max: e.target.value }})}
+                              className="w-full p-2 text-sm border border-slate-300 dark:border-slate-600 rounded-lg bg-slate-50 dark:bg-slate-900 dark:text-white"
+                          />
+                      </div>
+                  </div>
+              </div>
+          )}
+
+          {/* Active Filter Chips */}
+          {hasActiveFilters && (
+              <div className="flex flex-wrap gap-2 items-center">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider mr-2">Active Filters:</span>
+                  {activeFilters.categories.map(cat => (
+                      <span key={`cat-${cat}`} className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 px-3 py-1 rounded-full text-xs font-bold flex items-center">
+                          Category: {cat}
+                          <button onClick={() => toggleFilterItem('categories', cat)} className="ml-2 hover:text-blue-900"><X size={12}/></button>
+                      </span>
+                  ))}
+                  {activeFilters.suppliers.map(sup => (
+                      <span key={`sup-${sup}`} className="bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300 px-3 py-1 rounded-full text-xs font-bold flex items-center">
+                          Supplier: {sup}
+                          <button onClick={() => toggleFilterItem('suppliers', sup)} className="ml-2 hover:text-purple-900"><X size={12}/></button>
+                      </span>
+                  ))}
+                  {(activeFilters.stockRange.min !== '' || activeFilters.stockRange.max !== '') && (
+                      <span className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 px-3 py-1 rounded-full text-xs font-bold flex items-center">
+                          Stock: {activeFilters.stockRange.min || '0'} - {activeFilters.stockRange.max || '∞'}
+                          <button onClick={() => setActiveFilters({...activeFilters, stockRange: { min: '', max: '' }})} className="ml-2 hover:text-emerald-900"><X size={12}/></button>
+                      </span>
+                  )}
+                  <button onClick={clearAllFilters} className="text-xs text-red-500 hover:text-red-700 hover:underline font-medium ml-auto">Clear All</button>
               </div>
           )}
       </div>
 
-      {/* Main Table (Screen Only) */}
-      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden no-print">
-        <div className="overflow-x-auto">
+      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden relative">
           <table className="w-full text-left border-collapse">
             <thead className="bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-700">
               <tr>
-                <th className="p-4 w-12 text-center">
-                    <input 
-                        type="checkbox" 
-                        className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                        checked={processedProducts.length > 0 && selectedIds.size === processedProducts.length}
-                        onChange={handleSelectAll}
-                    />
+                <th className="p-4 w-10">
+                    <button onClick={handleSelectAll} className="flex items-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
+                        {selectedIds.size > 0 && selectedIds.size === filteredProducts.length ? <CheckSquare size={20} className="text-blue-600"/> : <Square size={20}/>}
+                    </button>
                 </th>
-                <th className="p-4 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition" onClick={() => handleSort('name')}>
-                    <div className="flex items-center text-slate-600 dark:text-slate-400 text-sm font-semibold">
-                        Product
-                        {sortField === 'name' ? (sortDirection === 'asc' ? <ArrowUp size={14} className="ml-1"/> : <ArrowDown size={14} className="ml-1"/>) : <ChevronsUpDown size={14} className="ml-1 opacity-50"/>}
-                    </div>
-                </th>
-                <th className="p-4 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition hidden sm:table-cell" onClick={() => handleSort('sku')}>
-                    <div className="flex items-center text-slate-600 dark:text-slate-400 text-sm font-semibold">
-                        SKU
-                        {sortField === 'sku' ? (sortDirection === 'asc' ? <ArrowUp size={14} className="ml-1"/> : <ArrowDown size={14} className="ml-1"/>) : <ChevronsUpDown size={14} className="ml-1 opacity-50"/>}
-                    </div>
-                </th>
-                <th className="p-4 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition hidden md:table-cell" onClick={() => handleSort('category')}>
-                    <div className="flex items-center text-slate-600 dark:text-slate-400 text-sm font-semibold">
-                        Category
-                        {sortField === 'category' ? (sortDirection === 'asc' ? <ArrowUp size={14} className="ml-1"/> : <ArrowDown size={14} className="ml-1"/>) : <ChevronsUpDown size={14} className="ml-1 opacity-50"/>}
-                    </div>
-                </th>
-                <th className="p-4 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition hidden lg:table-cell" onClick={() => handleSort('stockExpiryDate')}>
-                    <div className="flex items-center text-slate-600 dark:text-slate-400 text-sm font-semibold">
-                        Expiry
-                        {sortField === 'stockExpiryDate' ? (sortDirection === 'asc' ? <ArrowUp size={14} className="ml-1"/> : <ArrowDown size={14} className="ml-1"/>) : <ChevronsUpDown size={14} className="ml-1 opacity-50"/>}
-                    </div>
-                </th>
-                <th className="p-4 text-right cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition hidden md:table-cell" onClick={() => handleSort('cost')}>
-                    <div className="flex items-center justify-end text-slate-600 dark:text-slate-400 text-sm font-semibold">
-                        Cost
-                        {sortField === 'cost' ? (sortDirection === 'asc' ? <ArrowUp size={14} className="ml-1"/> : <ArrowDown size={14} className="ml-1"/>) : <ChevronsUpDown size={14} className="ml-1 opacity-50"/>}
-                    </div>
-                </th>
-                <th className="p-4 text-right cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition" onClick={() => handleSort('price')}>
-                    <div className="flex items-center justify-end text-slate-600 dark:text-slate-400 text-sm font-semibold">
-                        Price
-                        {sortField === 'price' ? (sortDirection === 'asc' ? <ArrowUp size={14} className="ml-1"/> : <ArrowDown size={14} className="ml-1"/>) : <ChevronsUpDown size={14} className="ml-1 opacity-50"/>}
-                    </div>
-                </th>
-                <th className="p-4 text-right cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition hidden lg:table-cell" onClick={() => handleSort('margin')}>
-                    <div className="flex items-center justify-end text-slate-600 dark:text-slate-400 text-sm font-semibold">
-                        Margin
-                        {sortField === 'margin' ? (sortDirection === 'asc' ? <ArrowUp size={14} className="ml-1"/> : <ArrowDown size={14} className="ml-1"/>) : <ChevronsUpDown size={14} className="ml-1 opacity-50"/>}
-                    </div>
-                </th>
-                <th className="p-4 text-center cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 transition" onClick={() => handleSort('stock')}>
-                    <div className="flex items-center justify-center text-slate-600 dark:text-slate-400 text-sm font-semibold">
-                        Stock
-                        {sortField === 'stock' ? (sortDirection === 'asc' ? <ArrowUp size={14} className="ml-1"/> : <ArrowDown size={14} className="ml-1"/>) : <ChevronsUpDown size={14} className="ml-1 opacity-50"/>}
-                    </div>
-                </th>
-                <th className="p-4 font-semibold text-slate-600 dark:text-slate-400 text-sm text-right no-print">Actions</th>
+                <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm">Product Name</th>
+                <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm">SKU / Barcode</th>
+                <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm">Category</th>
+                <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm text-right">Price / Cost</th>
+                <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm text-right">Margin</th>
+                <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm text-center">Stock</th>
+                <th className="p-4 font-semibold text-slate-600 dark:text-slate-300 text-sm text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-              {processedProducts.map(product => {
-                const days = getDaysUntilExpiry(product.stockExpiryDate);
-                const status = getExpiryStatus(days);
-                const isLowStock = product.stock <= product.minStockLevel;
-                const margin = product.price > 0 ? ((product.price - product.cost) / product.price) * 100 : 0;
-                
-                return (
-                    <tr key={product.id} className={`border-b border-slate-100 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition ${selectedIds.has(product.id) ? 'bg-blue-50/50 dark:bg-blue-900/20' : ''}`}>
-                    <td className="p-4 w-12 text-center">
-                        <input 
-                            type="checkbox" 
-                            className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                            checked={selectedIds.has(product.id)}
-                            onChange={() => handleSelectRow(product.id)}
-                        />
-                    </td>
-                    <td className="p-4">
-                        <div className="flex items-center">
-                            <img src={product.imageUrl || "https://placehold.co/40?text=No+Img"} alt="" className="w-10 h-10 rounded object-cover mr-3 bg-slate-200 no-print" />
-                            <div>
-                                <p className="font-medium text-slate-900 dark:text-white">{product.name}</p>
-                                <p className="text-xs text-slate-500 dark:text-slate-400 truncate max-w-[200px] no-print">{product.description}</p>
-                            </div>
-                        </div>
-                    </td>
-                    <td className="p-4 text-sm text-slate-600 dark:text-slate-300 hidden sm:table-cell">{product.sku}</td>
-                    <td className="p-4 text-sm text-slate-600 dark:text-slate-300 hidden md:table-cell">
-                        <span className="bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded text-xs font-medium text-slate-600 dark:text-slate-300 print:bg-transparent print:p-0">
-                            {product.category}
-                        </span>
-                    </td>
-                    <td className="p-4 hidden lg:table-cell">
-                        {status === 'NONE' ? (
-                            <div className="flex items-center text-slate-400">
-                                <span className="text-xs italic">N/A</span>
-                            </div>
-                        ) : (
-                            <div className="flex flex-col items-start w-32">
-                                {status === 'EXPIRED' && (
-                                    <div className="flex items-center text-red-600 dark:text-red-400 mb-0.5 bg-red-50 dark:bg-red-900/50 px-1.5 py-0.5 rounded print:bg-transparent print:p-0">
-                                        <AlertCircle size={12} className="mr-1" />
-                                        <span className="text-[10px] font-bold uppercase tracking-wider">Expired</span>
+                {filteredProducts.length === 0 ? (
+                    <tr><td colSpan={8} className="p-8 text-center text-slate-500 dark:text-slate-400">No products found matching your filters.</td></tr>
+                ) : (
+                    filteredProducts.map(product => {
+                        const margin = product.price > 0 ? ((product.price - product.cost) / product.price) * 100 : 0;
+                        const isLow = product.stock <= product.minStockLevel && product.stock > 0;
+                        const isOut = product.stock === 0;
+                        const isSelected = selectedIds.has(product.id);
+
+                        return (
+                            <tr key={product.id} className={`border-b border-slate-100 dark:border-slate-700 transition ${isSelected ? 'bg-blue-50 dark:bg-blue-900/10' : 'hover:bg-slate-50 dark:hover:bg-slate-700/50'}`}>
+                                <td className="p-4">
+                                    <button onClick={() => handleSelectRow(product.id)} className="flex items-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
+                                        {isSelected ? <CheckSquare size={20} className="text-blue-600"/> : <Square size={20}/>}
+                                    </button>
+                                </td>
+                                <td onClick={() => handleViewDetails(product)} className="p-4 cursor-pointer">
+                                    <div className="flex items-center">
+                                        <div className="w-10 h-10 rounded bg-slate-100 dark:bg-slate-700 mr-3 overflow-hidden shrink-0">
+                                            {product.imageUrl ? <img src={product.imageUrl} alt="" className="w-full h-full object-cover"/> : <Package className="w-5 h-5 m-auto text-slate-400"/>}
+                                        </div>
+                                        <div>
+                                            <div className="font-medium text-slate-900 dark:text-white hover:text-blue-600 dark:hover:text-blue-400 transition-colors">{product.name}</div>
+                                            {product.stockExpiryDate && <div className="text-[10px] text-orange-500">Exp: {product.stockExpiryDate}</div>}
+                                        </div>
                                     </div>
-                                )}
-                                {status === 'WARNING' && (
-                                    <div className="flex items-center text-amber-600 dark:text-amber-400 mb-0.5 bg-amber-50 dark:bg-amber-900/50 px-1.5 py-0.5 rounded print:bg-transparent print:p-0">
-                                        <AlertTriangle size={12} className="mr-1" />
-                                        <span className="text-[10px] font-bold uppercase tracking-wider">Warning</span>
-                                    </div>
-                                )}
-                                {status === 'OK' && (
-                                    <div className="flex items-center text-green-600 dark:text-green-400 mb-0.5 bg-green-50 dark:bg-green-900/50 px-1.5 py-0.5 rounded print:bg-transparent print:p-0">
-                                        <CheckCircle size={12} className="mr-1" />
-                                        <span className="text-[10px] font-bold uppercase tracking-wider">Valid</span>
-                                    </div>
-                                )}
-                                
-                                <div className={`text-sm font-medium mt-0.5 ${status === 'EXPIRED' ? 'text-red-800 dark:text-red-300 line-through opacity-75' : 'text-slate-600 dark:text-slate-300'}`}>
-                                    {product.stockExpiryDate}
-                                </div>
-                            </div>
-                        )}
-                    </td>
-                    <td className="p-4 text-sm text-slate-500 dark:text-slate-400 text-right tabular-nums hidden md:table-cell">{symbol}{formatCurrency(product.cost)}</td>
-                    <td className="p-4 text-sm font-medium text-slate-900 dark:text-white text-right tabular-nums">
-                        {symbol}{formatCurrency(product.price)}
-                        {product.unit && <span className="text-xs text-slate-400 block font-normal">/{product.unit}</span>}
-                    </td>
-                    <td className="p-4 text-sm text-right tabular-nums hidden lg:table-cell">
-                        <span className={`font-medium ${margin >= 50 ? 'text-green-600 dark:text-green-400' : margin >= 20 ? 'text-blue-600 dark:text-blue-400' : 'text-orange-500'}`}>
-                            {margin.toFixed(1)}%
-                        </span>
-                    </td>
-                    <td className="p-4 text-center">
-                        <div className="flex flex-col items-center justify-center group relative">
-                            <div className="flex items-center">
-                                <span className={`px-2 py-1 rounded-full text-xs font-bold flex items-center print:bg-transparent print:p-0
-                                    ${isLowStock ? 'bg-red-100 text-red-600 dark:bg-red-900/50 dark:text-red-400' : 'bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400'}`}>
-                                    {isLowStock && <AlertCircle size={10} className="mr-1" />}
-                                    {product.stock} {product.unit && <span className="ml-1 opacity-75">{product.unit}</span>}
-                                </span>
-                                <button 
-                                    onClick={() => handleOpenAdjModal(product)}
-                                    title="Adjust Stock Level"
-                                    className="ml-2 p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:text-slate-400 dark:hover:text-blue-400 dark:hover:bg-slate-700 rounded transition-colors no-print"
-                                >
-                                    <ClipboardEdit size={14} />
-                                </button>
-                            </div>
-                            {isLowStock && (
-                                <span className="text-[10px] text-red-500 dark:text-red-400 font-medium mt-1">Low (Min: {product.minStockLevel})</span>
-                            )}
-                        </div>
-                    </td>
-                    <td className="p-4 text-right no-print">
-                        <div className="flex items-center justify-end space-x-2">
-                             <button onClick={() => handleOpenDetails(product)} className="text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 p-1" title="View Details">
-                                <Eye size={18} />
-                            </button>
-                            <button onClick={() => handleOpenModal(product)} className="text-slate-400 hover:text-slate-600 dark:text-slate-400 dark:hover:text-slate-300 p-1" title="Edit Product">
-                                <Edit2 size={18} />
-                            </button>
-                            <button onClick={() => handleDelete(product.id)} className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 p-1" title="Delete Product">
-                                <Trash2 size={18} />
-                            </button>
-                        </div>
-                    </td>
-                    </tr>
-                );
-              })}
-              {processedProducts.length === 0 && (
-                  <tr><td colSpan={11} className="p-8 text-center text-slate-500 dark:text-slate-400">No products found matching filters.</td></tr>
-              )}
+                                </td>
+                                <td onClick={() => handleViewDetails(product)} className="p-4 cursor-pointer">
+                                      <div className="text-xs font-mono text-slate-700 dark:text-slate-300 uppercase font-bold">{product.sku}</div>
+                                      {product.barcode && <div className="text-[10px] font-mono text-slate-500 dark:text-slate-400">{product.barcode}</div>}
+                                </td>
+                                <td onClick={() => handleViewDetails(product)} className="p-4 cursor-pointer">
+                                      <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-slate-100 dark:bg-slate-700/50 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-600">
+                                          {product.category}
+                                      </span>
+                                </td>
+                                <td onClick={() => handleViewDetails(product)} className="p-4 text-right cursor-pointer">
+                                      <div className="font-black text-slate-900 dark:text-white">{symbol}{product.price.toFixed(2)}</div>
+                                      <div className="text-[10px] font-medium text-slate-500 dark:text-slate-400">Cost: {symbol}{product.cost.toFixed(2)}</div>
+                                </td>
+                                <td onClick={() => handleViewDetails(product)} className="p-4 text-right cursor-pointer">
+                                      <span className={`text-xs font-black px-2 py-1 rounded-lg ${
+                                          margin > 40 ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-400' :
+                                          margin > 15 ? 'bg-blue-100 text-blue-800 dark:bg-blue-500/20 dark:text-blue-400' :
+                                          'bg-orange-100 text-orange-800 dark:bg-orange-500/20 dark:text-orange-400'
+                                      }`}>
+                                          {margin.toFixed(1)}%
+                                      </span>
+                                </td>
+                                <td className="p-4 text-center font-black">
+                                      <button onClick={() => handleOpenAdjModal(product)} className={`px-2.5 py-1.5 rounded-lg border transition text-xs flex items-center justify-center mx-auto min-w-[70px] ${
+                                          isOut ? 'border-red-200 bg-red-50 text-red-700 dark:bg-red-500/20 dark:border-red-900/50 dark:text-red-400' : 
+                                          isLow ? 'border-orange-200 bg-orange-50 text-orange-700 dark:bg-orange-500/20 dark:border-orange-900/50 dark:text-orange-400' : 
+                                          'border-slate-200 bg-white text-slate-800 hover:bg-slate-50 dark:bg-slate-800 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700'
+                                      }`}>
+                                          {product.stock} <span className="text-[9px] font-normal opacity-60 uppercase ml-1">{product.unit}</span>
+                                      </button>
+                                </td>
+                                <td className="p-4 text-right">
+                                      <div className="flex items-center justify-end space-x-1">
+                                          <button onClick={() => handleViewDetails(product)} className="p-2 text-indigo-600 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:bg-indigo-900/30 rounded-lg" title="Product Details & History"><History size={16}/></button>
+                                          <button onClick={() => handleOpenModal(product)} className="p-2 text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700 rounded-lg" title="Edit"><Edit2 size={16}/></button>
+                                          <button onClick={() => handleDelete(product.id)} className="p-2 text-red-500 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/30 rounded-lg" title="Delete"><Trash2 size={16}/></button>
+                                      </div>
+                                </td>
+                            </tr>
+                        );
+                    })
+                )}
             </tbody>
           </table>
-        </div>
+          
+          {/* Bulk Action Toolbar */}
+          {selectedIds.size > 0 && (
+              <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 bg-slate-900 text-white rounded-full shadow-xl px-6 py-3 flex items-center gap-4 z-10 animate-in slide-in-from-bottom-10 fade-in duration-300">
+                  <span className="font-bold text-sm whitespace-nowrap">{selectedIds.size} Selected</span>
+                  <div className="h-4 w-[1px] bg-slate-700"></div>
+                  <button onClick={() => setIsBulkEditOpen(true)} className="flex items-center text-sm font-medium hover:text-blue-400 transition"><Layers size={16} className="mr-2"/> Bulk Edit</button>
+                  <button onClick={() => setIsBulkPrintOpen(true)} className="flex items-center text-sm font-medium hover:text-blue-400 transition"><Printer size={16} className="mr-2"/> Print Labels</button>
+                  <div className="h-4 w-[1px] bg-slate-700"></div>
+                  <button onClick={() => setSelectedIds(new Set())} className="p-1 hover:bg-slate-800 rounded-full"><X size={16}/></button>
+              </div>
+          )}
       </div>
 
-      {/* Floating Bulk Action Bar */}
-      {selectedIds.size > 0 && (
-          <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-40 bg-white dark:bg-slate-800 text-slate-800 dark:text-white px-6 py-3 rounded-full shadow-xl border border-slate-200 dark:border-slate-700 flex items-center gap-6 animate-in slide-in-from-bottom-10">
-              <div className="flex items-center font-bold">
-                  <span className="bg-blue-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs mr-2">{selectedIds.size}</span>
-                  Selected
-              </div>
-              <div className="h-6 w-px bg-slate-200 dark:bg-slate-700"></div>
-              <div className="flex gap-2">
-                  <button 
-                    onClick={handleOpenBulkModal}
-                    className="flex items-center px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-full text-sm font-medium transition"
-                  >
-                      <Layers size={16} className="mr-2"/> Adjust Stock
-                  </button>
-                  <button 
-                    onClick={() => setSelectedIds(new Set())}
-                    className="flex items-center px-4 py-1.5 text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700 rounded-full text-sm font-medium transition"
-                  >
-                      Cancel
-                  </button>
-              </div>
-          </div>
-      )}
-
-      {/* Printable Area (Maintained) */}
-      <div className="printable-area hidden">
-        {/* ... (Print logic preserved as is from original file, omitted for brevity but assumed present) ... */}
-        {/* Re-inserting simplified print block for context */}
-        <div className="p-6 border-b border-gray-300 mb-4">
-            <h1 className="text-2xl font-bold mb-2">Detailed Inventory Report</h1>
-            <div className="flex justify-between text-sm text-gray-600">
-                <div>
-                    <p>Generated by: {currentUser.name}</p>
-                    <p>Date: {new Date().toLocaleString()}</p>
-                </div>
-            </div>
-        </div>
-        <table>
-            <thead>
-                <tr>
-                    <th>Product</th>
-                    <th>SKU</th>
-                    <th>Unit</th>
-                    <th>Desc</th>
-                    <th className="text-right">Cost</th>
-                    <th className="text-right">Price</th>
-                    <th className="text-right">Margin</th>
-                    <th className="text-center">Stock</th>
-                    <th className="text-center">Status</th>
-                    <th className="text-right">Asset Val</th>
-                    <th className="text-right">Retail Val</th>
-                    <th className="text-center">Sold</th>
-                    <th className="text-right">Revenue</th>
-                    <th className="text-center">Ret.</th>
-                    <th className="text-right">Refund</th>
-                    <th className="text-right">Profit</th>
-                    <th>Expiry</th>
-                </tr>
-            </thead>
-            <tbody>
-                {Object.keys(printCategories).sort().map(category => (
-                    <React.Fragment key={category}>
-                        <tr className="category-header">
-                            <td colSpan={17}>{category}</td>
-                        </tr>
-                        {printCategories[category].map(p => {
-                            const stats = getProductFinancials(p);
-                            const margin = p.price > 0 ? (((p.price - p.cost) / p.price) * 100).toFixed(1) + '%' : '0.0%';
-                            
-                            let stockStatus = 'In Stock';
-                            if (p.stock === 0) stockStatus = 'Out of Stock';
-                            else if (p.stock <= p.minStockLevel) stockStatus = 'Low Stock';
-
-                            return (
-                                <tr key={p.id}>
-                                    <td>{p.name}</td>
-                                    <td>{p.sku}</td>
-                                    <td>{p.unit}</td>
-                                    <td>{p.description}</td>
-                                    <td className="text-right">{symbol}{formatCurrency(p.cost)}</td>
-                                    <td className="text-right">{symbol}{formatCurrency(p.price)}</td>
-                                    <td className="text-right">{margin}</td>
-                                    <td className="text-center">{p.stock}</td>
-                                    <td className="text-center">{stockStatus}</td>
-                                    <td className="text-right">{symbol}{formatCurrency(stats.assetValue)}</td>
-                                    <td className="text-right">{symbol}{formatCurrency(stats.retailValue)}</td>
-                                    <td className="text-center">{formatNumber(stats.unitsSold)}</td>
-                                    <td className="text-right">{symbol}{formatCurrency(stats.revenue)}</td>
-                                    <td className="text-center">{formatNumber(stats.unitsReturned)}</td>
-                                    <td className="text-right">{symbol}{formatCurrency(stats.refunded)}</td>
-                                    <td className={`text-right ${stats.netProfit >= 0 ? 'positive-profit' : 'negative-profit'}`}>
-                                        {symbol}{formatCurrency(stats.netProfit)}
-                                    </td>
-                                    <td>{p.stockExpiryDate || 'N/A'}</td>
-                                </tr>
-                            );
-                        })}
-                    </React.Fragment>
-                ))}
-                <tr className="totals-row">
-                    <td colSpan={7} className="text-right">GRAND TOTALS</td>
-                    <td className="text-center">{formatNumber(printTotals.stock)}</td>
-                    <td></td>
-                    <td className="text-right">{symbol}{formatCurrency(printTotals.assetValue)}</td>
-                    <td className="text-right">{symbol}{formatCurrency(printTotals.retailValue)}</td>
-                    <td className="text-center">{formatNumber(printTotals.unitsSold)}</td>
-                    <td className="text-right">{symbol}{formatCurrency(printTotals.revenue)}</td>
-                    <td className="text-center">{formatNumber(printTotals.unitsReturned)}</td>
-                    <td className="text-right">{symbol}{formatCurrency(printTotals.refunded)}</td>
-                    <td className={`text-right ${printTotals.netProfit >= 0 ? 'positive-profit' : 'negative-profit'}`}>
-                        {symbol}{formatCurrency(printTotals.netProfit)}
-                    </td>
-                    <td></td>
-                </tr>
-            </tbody>
-        </table>
-      </div>
-
-      {/* Stock Adjustment Modal (Single) */}
-      {isAdjModalOpen && selectedProductForAdj && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-              <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-md">
-                  <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-                      <h3 className="text-lg font-bold text-slate-800 dark:text-white">Adjust Stock Level</h3>
-                      <p className="text-sm text-slate-500 dark:text-slate-400">for {selectedProductForAdj.name}</p>
-                  </div>
-                  <div className="p-6 space-y-4">
-                      {/* ... Adjustment Form ... */}
-                      <div>
-                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Adjustment Type</label>
-                          <div className="flex space-x-2">
-                              {['ADD', 'REMOVE', 'SET'].map(t => (
-                                  <button
-                                    key={t}
-                                    onClick={() => setAdjType(t as AdjustmentType)}
-                                    className={`flex-1 py-2 text-sm font-medium rounded-lg border transition
-                                    ${adjType === t 
-                                        ? 'bg-blue-600 text-white border-blue-600' 
-                                        : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-600'}`}
-                                  >
-                                      {t}
-                                  </button>
-                              ))}
+      {/* Detailed View Modal */}
+      {isDetailOpen && detailProduct && (
+          <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col animate-in zoom-in-95 duration-200">
+                  {/* Header */}
+                  <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex justify-between items-start bg-slate-50 dark:bg-slate-700/50 rounded-t-xl">
+                      <div className="flex items-start gap-4">
+                          <div className="w-16 h-16 rounded-lg bg-white dark:bg-slate-600 border border-slate-200 dark:border-slate-500 overflow-hidden shrink-0 shadow-sm flex items-center justify-center">
+                              {detailProduct.imageUrl ? (
+                                  <img src={detailProduct.imageUrl} alt={detailProduct.name} className="w-full h-full object-cover" />
+                              ) : (
+                                  <Package className="text-slate-400" size={32} />
+                              )}
                           </div>
-                      </div>
-                      <div>
-                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                              {adjType === 'SET' ? 'New Total Quantity' : 'Quantity to ' + (adjType === 'ADD' ? 'Add' : 'Remove')} <span className="text-red-500">*</span>
-                          </label>
-                          <div className="relative">
-                            <input 
-                                type="number" 
-                                min="0"
-                                step={selectedProductForAdj.allowDecimal ? "0.001" : "1"}
-                                value={adjQuantity}
-                                onChange={(e) => setAdjQuantity(parseFloat(e.target.value) || 0)}
-                                className="w-full p-2 pr-10 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-lg font-bold text-center bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white"
-                            />
-                            {selectedProductForAdj.unit && (
-                                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-slate-400 font-medium">
-                                    {selectedProductForAdj.unit}
-                                </span>
-                            )}
-                          </div>
-                      </div>
-                      
-                      {/* Preview Calculation */}
-                      <div className="flex items-center justify-center bg-slate-50 dark:bg-slate-700/50 p-3 rounded-lg border border-slate-100 dark:border-slate-700">
-                          <div className="text-center">
-                              <p className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wider">Old</p>
-                              <p className="font-bold text-slate-700 dark:text-slate-300">{selectedProductForAdj.stock}</p>
-                          </div>
-                          <ArrowRight size={16} className="mx-4 text-slate-400" />
-                          <div className="text-center">
-                              <p className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wider">New</p>
-                              <p className="font-bold text-blue-600 dark:text-blue-400 text-xl">
-                                  {adjType === 'ADD' ? (selectedProductForAdj.stock + adjQuantity).toFixed(3).replace(/\.?0+$/, '') :
-                                   adjType === 'REMOVE' ? (selectedProductForAdj.stock - adjQuantity).toFixed(3).replace(/\.?0+$/, '') :
-                                   adjQuantity.toFixed(3).replace(/\.?0+$/, '')}
+                          <div>
+                              <div className="flex items-center gap-2 mb-1">
+                                  <h3 className="text-xl font-bold text-slate-800 dark:text-white">{detailProduct.name}</h3>
+                                  <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                                      {detailProduct.category}
+                                  </span>
+                              </div>
+                              <p className="text-sm text-slate-500 dark:text-slate-400 flex items-center gap-2">
+                                  <span className="font-mono bg-slate-200 dark:bg-slate-600 px-1.5 rounded text-slate-700 dark:text-slate-300">{detailProduct.sku}</span>
+                                  {detailProduct.barcode && <span className="font-mono text-xs opacity-75 border-l border-slate-300 pl-2">Barcode: {detailProduct.barcode}</span>}
                               </p>
                           </div>
                       </div>
+                      <button onClick={() => setIsDetailOpen(false)} className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full transition-colors text-slate-400"><X size={20}/></button>
+                  </div>
 
-                      <div>
-                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Reason <span className="text-red-500">*</span></label>
-                          <select 
-                            value={adjReason}
-                            onChange={(e) => setAdjReason(e.target.value)}
-                            className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white"
-                          >
-                              {reasons.map(r => <option key={r} value={r}>{r}</option>)}
-                          </select>
-                      </div>
-                      <div>
-                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Notes (Optional)</label>
-                          <textarea 
-                            rows={2}
-                            value={adjNotes}
-                            onChange={(e) => setAdjNotes(e.target.value)}
-                            className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white dark:placeholder-slate-400"
-                            placeholder="Additional details..."
-                          />
-                      </div>
-                  </div>
-                  <div className="p-6 border-t border-slate-100 dark:border-slate-700 flex justify-end space-x-3 bg-slate-50 dark:bg-slate-800/50 rounded-b-2xl">
-                      <button onClick={() => setIsAdjModalOpen(false)} className="px-4 py-2 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition">Cancel</button>
-                      <button 
-                        onClick={handleSubmitAdjustment}
-                        className="px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 shadow-md transition"
-                      >
-                          Confirm Adjustment
-                      </button>
-                  </div>
-              </div>
-          </div>
-      )}
-
-      {/* Bulk Stock Adjustment Modal */}
-      {isBulkAdjModalOpen && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-              <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-md">
-                  <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-blue-50 dark:bg-blue-900/20 rounded-t-2xl">
-                      <div>
-                          <h3 className="text-lg font-bold text-blue-900 dark:text-blue-300 flex items-center">
-                              <Layers size={20} className="mr-2"/> Bulk Stock Adjustment
-                          </h3>
-                          <p className="text-sm text-blue-700 dark:text-blue-400">Apply to {selectedIds.size} selected items</p>
-                      </div>
-                      <button onClick={() => setIsBulkAdjModalOpen(false)}><X size={20} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"/></button>
-                  </div>
-                  <div className="p-6 space-y-4">
-                      <div>
-                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Action</label>
-                          <div className="flex space-x-2">
-                              {['ADD', 'REMOVE', 'SET'].map(t => (
-                                  <button
-                                    key={t}
-                                    onClick={() => setBulkAdjType(t as AdjustmentType)}
-                                    className={`flex-1 py-2 text-sm font-bold rounded-lg border transition
-                                    ${bulkAdjType === t 
-                                        ? 'bg-blue-600 text-white border-blue-600 shadow-md' 
-                                        : 'bg-white dark:bg-slate-700 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-600'}`}
-                                  >
-                                      {t}
-                                  </button>
-                              ))}
-                          </div>
-                      </div>
+                  {/* Body */}
+                  <div className="flex-1 overflow-y-auto p-6">
                       
-                      <div className="bg-amber-50 dark:bg-amber-900/30 p-3 rounded-lg border border-amber-200 dark:border-amber-800 flex items-start text-xs text-amber-800 dark:text-amber-300">
-                          <AlertCircle size={14} className="mr-2 shrink-0 mt-0.5"/>
-                          <span>
-                              {bulkAdjType === 'SET' 
-                                  ? `Warning: This will set the stock of ALL ${selectedIds.size} items to the quantity below.`
-                                  : `This will ${bulkAdjType === 'ADD' ? 'add to' : 'subtract from'} the current stock of each selected item.`
-                              }
-                          </span>
-                      </div>
-
-                      <div>
-                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Quantity <span className="text-red-500">*</span></label>
-                          <input 
-                              type="number" 
-                              min="0"
-                              step="0.001"
-                              value={bulkAdjQuantity}
-                              onChange={(e) => setBulkAdjQuantity(parseFloat(e.target.value) || 0)}
-                              className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-xl font-bold text-center bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white"
-                          />
-                      </div>
-
-                      <div>
-                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Reason <span className="text-red-500">*</span></label>
-                          <select 
-                            value={bulkAdjReason}
-                            onChange={(e) => setBulkAdjReason(e.target.value)}
-                            className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white"
-                          >
-                              {reasons.map(r => <option key={r} value={r}>{r}</option>)}
-                          </select>
-                      </div>
-                      <div>
-                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Notes (Optional)</label>
-                          <textarea 
-                            rows={2}
-                            value={bulkAdjNotes}
-                            onChange={(e) => setBulkAdjNotes(e.target.value)}
-                            className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white dark:placeholder-slate-400"
-                            placeholder="Bulk adjustment notes..."
-                          />
-                      </div>
-                  </div>
-                  <div className="p-6 border-t border-slate-100 dark:border-slate-700 flex justify-end space-x-3 bg-slate-50 dark:bg-slate-800/50 rounded-b-2xl">
-                      <button onClick={() => setIsBulkAdjModalOpen(false)} className="px-4 py-2 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition">Cancel</button>
-                      <button 
-                        onClick={handleBulkSubmit}
-                        className="px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 shadow-md transition"
-                      >
-                          Confirm Bulk Update
-                      </button>
-                  </div>
-              </div>
-          </div>
-      )}
-
-      {/* ... Stock Conversion Modal and Product Details Modal (Preserved) ... */}
-      {/* (Previous modals like Conversion, Details, Product Form remain unchanged in logic but included in file content) */}
-      {isConversionModalOpen && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-              <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-2xl">
-                  {/* ... Conversion Modal Content ... */}
-                  {/* Reuse existing content from original file */}
-                  <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-                      <h3 className="text-xl font-bold text-slate-800 dark:text-white flex items-center">
-                          <ArrowRightLeft className="mr-2" size={24}/> Product Conversion / Repacking
-                      </h3>
-                      <p className="text-sm text-slate-500 dark:text-slate-400">Convert stock from one product to another (e.g., Bulk to Units).</p>
-                  </div>
-                  <div className="p-8">
-                      <div className="flex flex-col md:flex-row gap-6 items-center">
-                          {/* Source Side */}
-                          <div className="flex-1 w-full bg-red-50 dark:bg-red-900/10 p-4 rounded-xl border border-red-100 dark:border-red-900/30">
-                              <h4 className="font-bold text-red-700 dark:text-red-400 mb-3 text-sm uppercase">Source (Deduct)</h4>
-                              <div className="space-y-4">
-                                  <div>
-                                      <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Product <span className="text-red-500">*</span></label>
-                                      <select 
-                                          value={convSourceId}
-                                          onChange={(e) => setConvSourceId(e.target.value)}
-                                          className="w-full p-2 text-sm border rounded-lg outline-none focus:ring-2 focus:ring-red-500 bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white"
-                                      >
-                                          <option value="">Select Source Product</option>
-                                          {products.filter(p => p.id !== convTargetId).map(p => (
-                                              <option key={p.id} value={p.id} disabled={p.stock <= 0}>
-                                                  {p.name} {p.unit ? `(${p.unit})` : ''} - Stock: {p.stock} {p.stock <= 0 ? '(Out)' : ''}
-                                              </option>
-                                          ))}
-                                      </select>
-                                  </div>
-                                  <div>
-                                      <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Quantity to Convert <span className="text-red-500">*</span></label>
-                                      <div className="relative">
-                                        <input 
-                                            type="number" 
-                                            min="0"
-                                            step={getSourceProductForConv()?.allowDecimal ? "0.001" : "1"}
-                                            max={getSourceProductForConv()?.stock}
-                                            value={convSourceQty === 0 ? '' : convSourceQty}
-                                            onChange={(e) => {
-                                                const val = e.target.value === '' ? 0 : parseFloat(e.target.value);
-                                                setConvSourceQty(val);
-                                            }}
-                                            className={`w-full p-2 border rounded-lg font-bold text-center outline-none focus:ring-2 
-                                                ${isConvSourceQtyInvalid 
-                                                    ? 'border-red-500 text-red-600 focus:ring-red-500 bg-red-50 dark:bg-red-900/20' 
-                                                    : 'border-slate-200 text-slate-800 dark:text-white focus:ring-blue-500 bg-white dark:bg-slate-700 dark:border-slate-600'}`}
-                                        />
-                                        {getSourceProductForConv()?.unit && (
-                                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">
-                                                {getSourceProductForConv()?.unit}
-                                            </span>
-                                        )}
-                                      </div>
-                                      {isConvSourceQtyInvalid && (
-                                          <p className="text-xs text-red-600 dark:text-red-400 font-bold mt-1 text-center animate-pulse">
-                                              Max available: {getSourceProductForConv()?.stock}
-                                          </p>
-                                      )}
-                                  </div>
-                              </div>
+                      {/* Key Metrics Grid */}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                          <div className="bg-slate-50 dark:bg-slate-700/50 p-3 rounded-lg border border-slate-100 dark:border-slate-600">
+                              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase mb-1">Selling Price</p>
+                              <p className="text-lg font-black text-slate-800 dark:text-white">{symbol}{detailProduct.price.toFixed(2)}</p>
                           </div>
-
-                          {/* Arrow Icon */}
-                          <div className="shrink-0 flex flex-col items-center justify-center">
-                              <div className="bg-slate-100 dark:bg-slate-700 p-2 rounded-full">
-                                  <ArrowRight size={24} className="text-slate-400 hidden md:block" />
-                                  <ArrowDown size={24} className="text-slate-400 md:hidden" />
-                              </div>
+                          <div className="bg-slate-50 dark:bg-slate-700/50 p-3 rounded-lg border border-slate-100 dark:border-slate-600">
+                              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase mb-1">Cost Price</p>
+                              <p className="text-lg font-medium text-slate-700 dark:text-slate-300">{symbol}{detailProduct.cost.toFixed(2)}</p>
                           </div>
-
-                          {/* Target Side */}
-                          <div className="flex-1 w-full bg-green-50 dark:bg-green-900/10 p-4 rounded-xl border border-green-100 dark:border-green-900/30">
-                              <h4 className="font-bold text-green-700 dark:text-green-400 mb-3 text-sm uppercase">Target (Add)</h4>
-                              <div className="space-y-4">
-                                  <div>
-                                      <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Product <span className="text-red-500">*</span></label>
-                                      <select 
-                                          value={convTargetId}
-                                          onChange={(e) => setConvTargetId(e.target.value)}
-                                          className="w-full p-2 text-sm border rounded-lg outline-none focus:ring-2 focus:ring-green-500 bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white"
-                                      >
-                                          <option value="">Select Target Product</option>
-                                          {products.filter(p => p.id !== convSourceId).map(p => (
-                                              <option key={p.id} value={p.id}>{p.name} {p.unit ? `(${p.unit})` : ''}</option>
-                                          ))}
-                                      </select>
-                                  </div>
-                                  <div>
-                                      <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Quantity to Receive <span className="text-red-500">*</span></label>
-                                      <div className="relative">
-                                        <input 
-                                            type="number" 
-                                            min="0"
-                                            step="0.001"
-                                            value={convTargetQty}
-                                            onChange={(e) => setConvTargetQty(parseFloat(e.target.value) || 0)}
-                                            className="w-full p-2 border rounded-lg font-bold text-center text-green-600 dark:text-green-400 bg-white dark:bg-slate-700 dark:border-slate-600"
-                                        />
-                                        {products.find(p => p.id === convTargetId)?.unit && (
-                                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400">
-                                                {products.find(p => p.id === convTargetId)?.unit}
-                                            </span>
-                                        )}
-                                      </div>
-                                  </div>
-                              </div>
+                          <div className="bg-slate-50 dark:bg-slate-700/50 p-3 rounded-lg border border-slate-100 dark:border-slate-600">
+                              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase mb-1">Current Stock</p>
+                              <p className={`text-lg font-black ${detailProduct.stock <= detailProduct.minStockLevel ? 'text-red-500' : 'text-slate-800 dark:text-white'}`}>
+                                  {detailProduct.stock} <span className="text-xs font-normal text-slate-500">{detailProduct.unit}</span>
+                              </p>
+                          </div>
+                          <div className="bg-slate-50 dark:bg-slate-700/50 p-3 rounded-lg border border-slate-100 dark:border-slate-600">
+                              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase mb-1">Alert Level</p>
+                              <p className="text-lg font-medium text-orange-600 dark:text-orange-400">{detailProduct.minStockLevel} <span className="text-xs font-normal text-slate-500">units</span></p>
                           </div>
                       </div>
 
-                      {/* Summary/Preview */}
-                      {convSourceId && convTargetId && (
-                           <div className="mt-6 p-4 bg-slate-50 dark:bg-slate-700/50 rounded-lg text-center text-sm text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-600">
-                               Converting <span className="font-bold">{convSourceQty} {products.find(p => p.id === convSourceId)?.unit}</span> of {products.find(p => p.id === convSourceId)?.name} into <span className="font-bold">{convTargetQty} {products.find(p => p.id === convTargetId)?.unit}</span> of {products.find(p => p.id === convTargetId)?.name}.
-                           </div>
-                      )}
-                  </div>
-
-                  <div className="p-6 border-t border-slate-100 dark:border-slate-700 flex justify-end space-x-3 bg-slate-50 dark:bg-slate-800/50 rounded-b-2xl">
-                      <button 
-                          onClick={() => setIsConversionModalOpen(false)} 
-                          className="px-4 py-2 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition"
-                      >
-                          Cancel
-                      </button>
-                      <button 
-                          onClick={handleConvertStock}
-                          disabled={!convSourceId || !convTargetId || convSourceQty <= 0 || convTargetQty <= 0 || isConvSourceQtyInvalid}
-                          className="px-6 py-2 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 shadow-md transition disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                          Confirm Conversion
-                      </button>
-                  </div>
-              </div>
-          </div>
-      )}
-
-      {/* Product Details & History Modal (Maintained) */}
-      {isDetailsModalOpen && selectedProductDetails && (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-              <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
-                  {/* ... Header with Product Info ... */}
-                  <div className="p-6 border-b border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 rounded-t-xl">
-                      <div className="flex justify-between items-start">
-                          <div className="flex gap-4">
-                              <div className="w-20 h-20 bg-white dark:bg-slate-700 rounded-lg border border-slate-200 dark:border-slate-600 overflow-hidden flex-shrink-0">
-                                  <img src={selectedProductDetails.imageUrl || "https://placehold.co/100?text=Product"} alt={selectedProductDetails.name} className="w-full h-full object-cover" />
-                              </div>
+                      {/* Detailed Info Grid */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                          <div className="space-y-4">
                               <div>
-                                  <div className="flex items-center gap-2 mb-1">
-                                      <h3 className="text-xl font-bold text-slate-800 dark:text-white">{selectedProductDetails.name}</h3>
-                                      <span className="bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 text-xs px-2 py-0.5 rounded font-medium">{selectedProductDetails.category}</span>
-                                  </div>
-                                  <p className="text-slate-500 dark:text-slate-400 text-sm mb-2">{selectedProductDetails.description}</p>
-                                  <div className="flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400">
-                                      <span className="bg-slate-200 dark:bg-slate-700 px-2 py-0.5 rounded text-slate-600 dark:text-slate-300 font-mono">SKU: {selectedProductDetails.sku}</span>
-                                      {selectedProductDetails.unit && (
-                                          <span className="bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 px-2 py-0.5 rounded font-bold">
-                                              Unit: {selectedProductDetails.unit}
+                                  <h4 className="text-sm font-bold text-slate-800 dark:text-white mb-2 flex items-center"><Info size={16} className="mr-2 text-blue-500"/> Product Information</h4>
+                                  <div className="bg-white dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700">
+                                      <div className="flex justify-between p-3 text-sm">
+                                          <span className="text-slate-500 dark:text-slate-400">Supplier</span>
+                                          <span className="font-medium text-slate-800 dark:text-white">{detailProduct.supplier || 'N/A'}</span>
+                                      </div>
+                                      <div className="flex justify-between p-3 text-sm">
+                                          <span className="text-slate-500 dark:text-slate-400">Unit Type</span>
+                                          <span className="font-medium text-slate-800 dark:text-white">{detailProduct.unit || 'Piece'}</span>
+                                      </div>
+                                      <div className="flex justify-between p-3 text-sm">
+                                          <span className="text-slate-500 dark:text-slate-400">Stock Expiry</span>
+                                          <span className={`font-medium ${detailProduct.stockExpiryDate ? 'text-slate-800 dark:text-white' : 'text-slate-400 italic'}`}>
+                                              {detailProduct.stockExpiryDate ? new Date(detailProduct.stockExpiryDate).toLocaleDateString() : 'None'}
                                           </span>
-                                      )}
-                                      {selectedProductDetails.stockExpiryDate && (
-                                          <span className="flex items-center">
-                                              <History size={12} className="mr-1"/> Exp: {selectedProductDetails.stockExpiryDate}
-                                          </span>
-                                      )}
-                                      {selectedProductDetails.allowDecimal && (
-                                          <span className="flex items-center bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300 px-2 py-0.5 rounded font-medium">
-                                              <Scale size={12} className="mr-1"/> Decimal Qty
-                                          </span>
-                                      )}
+                                      </div>
                                   </div>
                               </div>
                           </div>
-                          <button onClick={() => setIsDetailsModalOpen(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"><X size={24}/></button>
-                      </div>
-                  </div>
-
-                  {/* ... Key Stats Grid ... */}
-                  <div className="grid grid-cols-5 border-b border-slate-200 dark:border-slate-700 divide-x divide-slate-200 dark:divide-slate-700 bg-white dark:bg-slate-800">
-                      <div className="p-4 text-center">
-                          <p className="text-xs text-slate-500 dark:text-slate-400 uppercase font-medium">Stock Level</p>
-                          <div className={`text-xl font-bold ${selectedProductDetails.stock <= selectedProductDetails.minStockLevel ? 'text-red-600 dark:text-red-400' : 'text-slate-800 dark:text-white'}`}>
-                              {selectedProductDetails.stock} <span className="text-xs font-normal text-slate-400">{selectedProductDetails.unit || ''}</span>
-                          </div>
-                          <p className="text-[10px] text-slate-400">Min: {selectedProductDetails.minStockLevel}</p>
-                      </div>
-                      <div className="p-4 text-center">
-                          <p className="text-xs text-slate-500 dark:text-slate-400 uppercase font-medium">Unit Cost</p>
-                          <div className="text-xl font-bold text-slate-600 dark:text-slate-300">{symbol}{formatCurrency(selectedProductDetails.cost)}</div>
-                      </div>
-                      <div className="p-4 text-center">
-                          <p className="text-xs text-slate-500 dark:text-slate-400 uppercase font-medium">Sales Price</p>
-                          <div className="text-xl font-bold text-slate-800 dark:text-white">{symbol}{formatCurrency(selectedProductDetails.price)}</div>
-                      </div>
-                      <div className="p-4 text-center">
-                          <p className="text-xs text-slate-500 dark:text-slate-400 uppercase font-medium">Profit Margin</p>
-                          <div className="text-xl font-bold text-green-600 dark:text-green-400">
-                              {selectedProductDetails.price > 0 
-                                ? (((selectedProductDetails.price - selectedProductDetails.cost) / selectedProductDetails.price) * 100).toFixed(1)
-                                : '0.0'}%
+                          <div>
+                              <h4 className="text-sm font-bold text-slate-800 dark:text-white mb-2 flex items-center"><FileText size={16} className="mr-2 text-indigo-500"/> Description</h4>
+                              <div className="bg-slate-50 dark:bg-slate-700/30 p-4 rounded-lg border border-slate-200 dark:border-slate-600 text-sm text-slate-600 dark:text-slate-300 min-h-[105px] italic">
+                                  {detailProduct.description || "No description available."}
+                              </div>
                           </div>
                       </div>
-                      <div className="p-4 text-center">
-                          <p className="text-xs text-slate-500 dark:text-slate-400 uppercase font-medium">Total Asset Value</p>
-                          <div className="text-xl font-bold text-indigo-600 dark:text-indigo-400">
-                              {symbol}{formatCurrency(selectedProductDetails.stock * selectedProductDetails.cost)}
-                          </div>
-                      </div>
-                  </div>
 
-                  {/* ... Sales Performance Snippet ... */}
-                  <div className="bg-slate-50 dark:bg-slate-700/30 p-3 border-b border-slate-200 dark:border-slate-700 flex justify-between items-center text-sm px-6">
-                      <span className="text-slate-500 dark:text-slate-400">Sales Performance (All time)</span>
-                      <span className="font-medium text-slate-700 dark:text-slate-200">
-                          {formatNumber(sales.reduce((acc, sale) => {
-                              const item = sale.items.find(i => i.productId === selectedProductDetails.id);
-                              return acc + (item ? item.quantity : 0);
-                          }, 0))} units sold
-                      </span>
-                  </div>
-
-                  {/* ... Tabs ... */}
-                  <div className="flex border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
-                      <button 
-                        onClick={() => setHistoryView('ADJUSTMENTS')}
-                        className={`flex-1 py-3 text-sm font-medium border-b-2 transition-colors flex items-center justify-center
-                        ${historyView === 'ADJUSTMENTS' 
-                            ? 'border-blue-600 text-blue-600 dark:text-blue-400 dark:border-blue-400' 
-                            : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}
-                      >
-                          <ClipboardList size={16} className="mr-2"/> Stock Adjustments
-                      </button>
-                      <button 
-                        onClick={() => setHistoryView('RETURNS')}
-                        className={`flex-1 py-3 text-sm font-medium border-b-2 transition-colors flex items-center justify-center
-                        ${historyView === 'RETURNS' 
-                            ? 'border-red-600 text-red-600 dark:text-red-400 dark:border-red-400' 
-                            : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}
-                      >
-                          <RotateCcw size={16} className="mr-2"/> Customer Returns
-                      </button>
-                      <button 
-                        onClick={() => setHistoryView('PRICE')}
-                        className={`flex-1 py-3 text-sm font-medium border-b-2 transition-colors flex items-center justify-center
-                        ${historyView === 'PRICE' 
-                            ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 dark:border-indigo-400' 
-                            : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}
-                      >
-                          <TrendingUp size={16} className="mr-2"/> Price Logs
-                      </button>
-                  </div>
-
-                  {/* ... History Views (Maintained) ... */}
-                  {historyView === 'ADJUSTMENTS' && (
-                    <div className="flex-1 overflow-hidden flex flex-col bg-white dark:bg-slate-800">
-                        {/* Filters */}
-                        <div className="p-4 bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-700 flex flex-wrap gap-4 items-end">
-                            <div>
-                                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Type</label>
-                                <select 
-                                    value={historyFilterType}
-                                    onChange={(e) => setHistoryFilterType(e.target.value as AdjustmentType | 'ALL')}
-                                    className="p-2 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 w-32 bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white"
-                                >
-                                    <option value="ALL">All Types</option>
-                                    <option value="ADD">Add</option>
-                                    <option value="REMOVE">Remove</option>
-                                    <option value="SET">Set</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Start Date</label>
-                                <input 
-                                    type="date" 
-                                    value={historyStartDate}
-                                    onChange={(e) => setHistoryStartDate(e.target.value)}
-                                    className="p-2 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white dark:[color-scheme:dark]"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">End Date</label>
-                                <input 
-                                    type="date" 
-                                    value={historyEndDate}
-                                    onChange={(e) => setHistoryEndDate(e.target.value)}
-                                    className="p-2 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white dark:[color-scheme:dark]"
-                                />
-                            </div>
-                            <button 
-                                onClick={() => {
-                                    setHistoryFilterType('ALL');
-                                    setHistoryStartDate('');
-                                    setHistoryEndDate('');
-                                }}
-                                className="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 underline pb-2 px-2"
-                            >
-                                Clear
-                            </button>
-                        </div>
-
-                        <div className="p-0 overflow-y-auto flex-1">
-                            <table className="w-full text-left">
-                                <thead className="bg-slate-50 dark:bg-slate-800 text-xs text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 sticky top-0">
-                                    <tr>
-                                        <th className="px-4 py-3">Date</th>
-                                        <th className="px-4 py-3">User</th>
-                                        <th className="px-4 py-3">Type</th>
-                                        <th className="px-4 py-3">Reason</th>
-                                        <th className="px-4 py-3 text-right">Prev. Stock</th>
-                                        <th className="px-4 py-3 text-right">Adjustment</th>
-                                        <th className="px-4 py-3 text-right">New Stock</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="text-sm">
-                                    {filteredHistory.map(adj => (
-                                        <tr key={adj.id} className="border-b border-slate-50 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                                            <td className="px-4 py-3 text-slate-600 dark:text-slate-300 whitespace-nowrap">
-                                                {new Date(adj.timestamp).toLocaleDateString()}
-                                                <div className="text-xs text-slate-400">{new Date(adj.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
-                                            </td>
-                                            <td className="px-4 py-3 text-slate-800 dark:text-slate-200">
-                                                {adj.userName}
-                                            </td>
-                                            <td className="px-4 py-3">
-                                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded
-                                                    ${adj.type === 'ADD' ? 'bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300' :
-                                                    adj.type === 'REMOVE' ? 'bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-300' :
-                                                    'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300'}`}>
-                                                    {adj.type}
-                                                </span>
-                                            </td>
-                                            <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
-                                                {adj.reason}
-                                                {adj.notes && <div className="text-xs text-slate-400 italic mt-0.5 max-w-[200px] truncate">{adj.notes}</div>}
-                                            </td>
-                                            <td className="px-4 py-3 text-right text-slate-500 dark:text-slate-400">
-                                                {adj.previousStock}
-                                            </td>
-                                            <td className="px-4 py-3 text-right font-medium dark:text-white">
-                                                {adj.type === 'ADD' ? `+${adj.quantity}` :
-                                                adj.type === 'REMOVE' ? `-${adj.quantity}` :
-                                                (adj.quantity - adj.previousStock > 0 ? `+${(adj.quantity - adj.previousStock).toFixed(3).replace(/\.?0+$/, '')}` : `${(adj.quantity - adj.previousStock).toFixed(3).replace(/\.?0+$/, '')}`)}
-                                            </td>
-                                            <td className="px-4 py-3 text-right font-bold text-slate-700 dark:text-slate-300">
-                                                {adj.newStock}
-                                            </td>
-                                        </tr>
-                                    ))}
-                                    {filteredHistory.length === 0 && (
-                                        <tr><td colSpan={7} className="p-8 text-center text-slate-400 italic">No adjustment history found matching filters.</td></tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                  )}
-
-                  {historyView === 'RETURNS' && (
-                       <div className="p-0 overflow-y-auto flex-1 bg-white dark:bg-slate-800">
-                          <table className="w-full text-left">
-                              <thead className="bg-slate-50 dark:bg-slate-800 text-xs text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 sticky top-0">
-                                  <tr>
-                                      <th className="px-4 py-3">Date</th>
-                                      <th className="px-4 py-3">Return ID</th>
-                                      <th className="px-4 py-3">Customer</th>
-                                      <th className="px-4 py-3">Reason</th>
-                                      <th className="px-4 py-3 text-center">Restocked</th>
-                                      <th className="px-4 py-3 text-right">Qty</th>
-                                      <th className="px-4 py-3 text-right">Refund</th>
-                                  </tr>
-                              </thead>
-                              <tbody className="text-sm">
-                                  {productReturns.map((retItem, idx) => (
-                                      <tr key={`${retItem.returnId}-${idx}`} className="border-b border-slate-50 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                                          <td className="px-4 py-3 text-slate-600 dark:text-slate-300 whitespace-nowrap">
-                                              {new Date(retItem.timestamp).toLocaleDateString()}
-                                              <div className="text-xs text-slate-400">{new Date(retItem.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
-                                          </td>
-                                          <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
-                                              #{retItem.returnId.split('-')[1]}
-                                              <div className="text-xs text-slate-400">Sale: #{retItem.originalSaleId.split('-')[1]}</div>
-                                          </td>
-                                          <td className="px-4 py-3 font-medium text-slate-800 dark:text-white">
-                                              {retItem.customerName}
-                                          </td>
-                                          <td className="px-4 py-3 text-slate-600 dark:text-slate-300">
-                                              {retItem.reason}
-                                          </td>
-                                          <td className="px-4 py-3 text-center">
-                                              {retItem.restock ? (
-                                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-400">
-                                                      <CheckCircle size={10} className="mr-1"/> Yes
-                                                  </span>
-                                              ) : (
-                                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-red-100 dark:bg-red-900/50 text-red-700 dark:text-red-400">
-                                                      <X size={10} className="mr-1"/> No
-                                                  </span>
-                                              )}
-                                          </td>
-                                          <td className="px-4 py-3 text-right font-medium text-slate-700 dark:text-slate-300">
-                                              {retItem.quantity}
-                                          </td>
-                                          <td className="px-4 py-3 text-right text-red-600 dark:text-red-400 font-medium">
-                                              -{symbol}{formatCurrency(retItem.refundAmount)}
-                                          </td>
-                                      </tr>
-                                  ))}
-                                  {productReturns.length === 0 && (
-                                      <tr><td colSpan={7} className="p-8 text-center text-slate-400 italic">No returns recorded for this product.</td></tr>
-                                  )}
-                              </tbody>
-                          </table>
-                      </div>
-                  )}
-
-                  {historyView === 'PRICE' && (
-                        <div className="p-0 overflow-y-auto flex-1 bg-white dark:bg-slate-800">
-                            <table className="w-full text-left">
-                                <thead className="bg-slate-50 dark:bg-slate-800 text-xs text-slate-500 dark:text-slate-400 uppercase border-b border-slate-200 dark:border-slate-700 sticky top-0">
-                                    <tr>
-                                        <th className="px-4 py-3">Date</th>
-                                        <th className="px-4 py-3">User</th>
-                                        <th className="px-4 py-3">Change Type</th>
-                                        <th className="px-4 py-3 text-right">Old Value</th>
-                                        <th className="px-4 py-3 text-center"></th>
-                                        <th className="px-4 py-3 text-right">New Value</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="text-sm">
-                                    {productPrices.length === 0 ? (
-                                        <tr><td colSpan={6} className="p-8 text-center text-slate-400 italic">No price or cost history recorded.</td></tr>
-                                    ) : (
-                                        productPrices.map(ph => (
-                                            <tr key={ph.id} className="border-b border-slate-50 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                                                <td className="px-4 py-3 text-slate-600 dark:text-slate-300 whitespace-nowrap">
-                                                    {new Date(ph.timestamp).toLocaleDateString()}
-                                                    <div className="text-xs text-slate-400">{new Date(ph.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
-                                                </td>
-                                                <td className="px-4 py-3 text-slate-800 dark:text-slate-200">
-                                                    {ph.userName}
-                                                </td>
-                                                <td className="px-4 py-3">
-                                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded
-                                                        ${ph.type === 'PRICE' 
-                                                            ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300' 
-                                                            : 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300'}`}>
-                                                        {ph.type === 'PRICE' ? 'Selling Price' : 'Unit Cost'}
-                                                    </span>
-                                                </td>
-                                                <td className="px-4 py-3 text-right text-slate-500 dark:text-slate-400">
-                                                    {symbol}{formatCurrency(ph.oldValue)}
-                                                </td>
-                                                <td className="px-4 py-3 text-center text-slate-400">
-                                                    <div className="flex justify-center">
-                                                        {ph.newValue > ph.oldValue ? (
-                                                            <ArrowBigUp size={16} className={ph.type === 'PRICE' ? 'text-green-500' : 'text-orange-500'} fill="currentColor" />
-                                                        ) : (
-                                                            <ArrowBigDown size={16} className={ph.type === 'PRICE' ? 'text-red-500' : 'text-green-500'} fill="currentColor" />
-                                                        )}
-                                                    </div>
-                                                </td>
-                                                <td className="px-4 py-3 text-right font-bold text-slate-800 dark:text-white">
-                                                    {symbol}{formatCurrency(ph.newValue)}
-                                                </td>
-                                            </tr>
-                                        ))
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                  )}
-              </div>
-          </div>
-      )}
-
-      {/* Product Modal (Same as before) */}
-      {isModalOpen && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-              <h3 className="text-xl font-bold text-slate-800 dark:text-white">{editingProduct ? 'Edit Product' : 'Add New Product'}</h3>
-            </div>
-            
-            <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="md:col-span-2">
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Product Image</label>
-                  <div className="flex items-start space-x-4">
-                      <div className="w-24 h-24 rounded-lg bg-slate-100 dark:bg-slate-700 border border-dashed border-slate-300 dark:border-slate-500 flex items-center justify-center overflow-hidden relative shrink-0">
-                          {formData.imageUrl ? (
-                              <img src={formData.imageUrl} alt="Preview" className="w-full h-full object-cover" />
-                          ) : (
-                              <ImageIcon className="text-slate-400" size={32} />
-                          )}
-                      </div>
-                      <div className="flex-1">
-                          <div className="flex flex-col gap-2">
-                               <label className="cursor-pointer bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 hover:bg-slate-50 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 px-4 py-2 rounded-lg text-sm font-medium inline-flex items-center transition w-fit">
-                                  <Upload size={16} className="mr-2"/> Upload Image
-                                  <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
-                              </label>
-                              <input
-                                  type="text"
-                                  placeholder="Or paste image URL..."
-                                  value={formData.imageUrl || ''}
-                                  onChange={e => setFormData({...formData, imageUrl: e.target.value})}
-                                  className="w-full p-2 text-sm border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white dark:placeholder-slate-400"
-                              />
-                          </div>
-                          {formData.imageUrl && (
-                              <button
-                                  onClick={() => setFormData({...formData, imageUrl: ''})}
-                                  className="text-red-500 text-xs mt-2 hover:underline"
+                      {/* History Section */}
+                      <div className="border-t border-slate-200 dark:border-slate-700 pt-6">
+                          <h4 className="text-lg font-bold text-slate-800 dark:text-white mb-4 flex items-center"><History size={20} className="mr-2"/> Activity History</h4>
+                          
+                          {/* Tabs */}
+                          <div className="flex border-b border-slate-200 dark:border-slate-700 mb-4 gap-6">
+                              <button 
+                                  onClick={() => setActiveHistoryTab('STOCK')}
+                                  className={`py-2 text-sm font-bold border-b-2 transition-colors ${activeHistoryTab === 'STOCK' ? 'border-blue-600 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'}`}
                               >
-                                  Remove Image
+                                  Stock Changes
                               </button>
-                          )}
+                              <button 
+                                  onClick={() => setActiveHistoryTab('PRICE')}
+                                  className={`py-2 text-sm font-bold border-b-2 transition-colors ${activeHistoryTab === 'PRICE' ? 'border-blue-600 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'}`}
+                              >
+                                  Price History
+                              </button>
+                              <button 
+                                  onClick={() => setActiveHistoryTab('RETURNS')}
+                                  className={`py-2 text-sm font-bold border-b-2 transition-colors ${activeHistoryTab === 'RETURNS' ? 'border-blue-600 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'}`}
+                              >
+                                  Return History
+                              </button>
+                          </div>
+
+                          <div className="min-h-[200px]">
+                              {activeHistoryTab === 'STOCK' && (
+                                  getProductHistory(detailProduct.id).length === 0 ? (
+                                      <div className="flex flex-col items-center justify-center py-10 text-slate-400">
+                                          <Box size={32} className="opacity-20 mb-2"/>
+                                          <p className="text-sm">No stock history recorded.</p>
+                                      </div>
+                                  ) : (
+                                      <table className="w-full text-left text-xs border-collapse">
+                                          <thead className="bg-slate-50 dark:bg-slate-900 font-bold text-slate-500 dark:text-slate-400 uppercase">
+                                              <tr>
+                                                  <th className="p-3 border-b dark:border-slate-700">Date</th>
+                                                  <th className="p-3 border-b dark:border-slate-700">Type</th>
+                                                  <th className="p-3 border-b dark:border-slate-700 text-right">Qty</th>
+                                                  <th className="p-3 border-b dark:border-slate-700 text-center">Stock</th>
+                                                  <th className="p-3 border-b dark:border-slate-700">User / Reason</th>
+                                              </tr>
+                                          </thead>
+                                          <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                                              {getProductHistory(detailProduct.id).map(adj => (
+                                                  <tr key={adj.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                                                      <td className="p-3 text-slate-600 dark:text-slate-300">
+                                                          {new Date(adj.timestamp).toLocaleDateString()} <span className="text-slate-400">{new Date(adj.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                                                      </td>
+                                                      <td className="p-3">
+                                                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                                              adj.type === 'ADD' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
+                                                              adj.type === 'REMOVE' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
+                                                              'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                                                          }`}>
+                                                              {adj.type}
+                                                          </span>
+                                                      </td>
+                                                      <td className={`p-3 text-right font-bold ${adj.type === 'ADD' ? 'text-green-600 dark:text-green-400' : adj.type === 'REMOVE' ? 'text-red-600 dark:text-red-400' : 'text-blue-600 dark:text-blue-400'}`}>
+                                                          {adj.type === 'ADD' ? '+' : adj.type === 'REMOVE' ? '-' : ''}{adj.quantity}
+                                                      </td>
+                                                      <td className="p-3 text-center">
+                                                          <div className="flex items-center justify-center gap-1">
+                                                              <span className="text-slate-400 line-through">{adj.previousStock}</span>
+                                                              <ArrowRight size={10} className="text-slate-300"/>
+                                                              <span className="font-bold text-slate-800 dark:text-white">{adj.newStock}</span>
+                                                          </div>
+                                                      </td>
+                                                      <td className="p-3 max-w-[200px]">
+                                                          <div className="font-medium text-slate-800 dark:text-white truncate">{adj.userName}</div>
+                                                          <div className="text-slate-500 italic truncate text-[10px]">{adj.reason}</div>
+                                                      </td>
+                                                  </tr>
+                                              ))}
+                                          </tbody>
+                                      </table>
+                                  )
+                              )}
+                              
+                              {activeHistoryTab === 'PRICE' && (
+                                  getProductPriceHistory(detailProduct.id).length === 0 ? (
+                                      <div className="flex flex-col items-center justify-center py-10 text-slate-400">
+                                          <Tag size={32} className="opacity-20 mb-2"/>
+                                          <p className="text-sm">No price changes recorded.</p>
+                                      </div>
+                                  ) : (
+                                      <table className="w-full text-left text-xs border-collapse">
+                                          <thead className="bg-slate-50 dark:bg-slate-900 font-bold text-slate-500 dark:text-slate-400 uppercase">
+                                              <tr>
+                                                  <th className="p-3 border-b dark:border-slate-700">Date</th>
+                                                  <th className="p-3 border-b dark:border-slate-700">User</th>
+                                                  <th className="p-3 border-b dark:border-slate-700">Type</th>
+                                                  <th className="p-3 border-b dark:border-slate-700 text-right">Old</th>
+                                                  <th className="p-3 border-b dark:border-slate-700 text-right">New</th>
+                                                  <th className="p-3 border-b dark:border-slate-700 text-right">Change</th>
+                                              </tr>
+                                          </thead>
+                                          <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                                              {getProductPriceHistory(detailProduct.id).map(log => {
+                                                  const diff = log.newValue - log.oldValue;
+                                                  const isIncrease = diff > 0;
+                                                  return (
+                                                      <tr key={log.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                                                          <td className="p-3 text-slate-600 dark:text-slate-300">
+                                                              {new Date(log.timestamp).toLocaleDateString()} <span className="text-slate-400">{new Date(log.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                                                          </td>
+                                                          <td className="p-3 font-medium text-slate-800 dark:text-white">{log.userName}</td>
+                                                          <td className="p-3 uppercase font-bold text-[10px] text-slate-500">{log.type}</td>
+                                                          <td className="p-3 text-right text-slate-500">{symbol}{log.oldValue.toFixed(2)}</td>
+                                                          <td className="p-3 text-right font-bold text-slate-800 dark:text-white">{symbol}{log.newValue.toFixed(2)}</td>
+                                                          <td className={`p-3 text-right font-bold ${isIncrease ? 'text-green-600' : 'text-red-600'}`}>
+                                                              {isIncrease ? '+' : ''}{Math.abs((diff / log.oldValue) * 100).toFixed(1)}%
+                                                          </td>
+                                                      </tr>
+                                                  );
+                                              })}
+                                          </tbody>
+                                      </table>
+                                  )
+                              )}
+
+                              {activeHistoryTab === 'RETURNS' && (
+                                  getProductReturnHistory(detailProduct.id).length === 0 ? (
+                                      <div className="flex flex-col items-center justify-center py-10 text-slate-400">
+                                          <RotateCcw size={32} className="opacity-20 mb-2"/>
+                                          <p className="text-sm">No returns recorded.</p>
+                                      </div>
+                                  ) : (
+                                      <table className="w-full text-left text-xs border-collapse">
+                                          <thead className="bg-slate-50 dark:bg-slate-900 font-bold text-slate-500 dark:text-slate-400 uppercase">
+                                              <tr>
+                                                  <th className="p-3 border-b dark:border-slate-700">Date</th>
+                                                  <th className="p-3 border-b dark:border-slate-700">Order Ref</th>
+                                                  <th className="p-3 border-b dark:border-slate-700 text-center">Qty</th>
+                                                  <th className="p-3 border-b dark:border-slate-700">Reason</th>
+                                                  <th className="p-3 border-b dark:border-slate-700 text-center">Restocked</th>
+                                              </tr>
+                                          </thead>
+                                          <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                                              {getProductReturnHistory(detailProduct.id).map(ret => {
+                                                  const item = ret.items.find(i => i.productId === detailProduct.id);
+                                                  if (!item) return null;
+                                                  return (
+                                                      <tr key={ret.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                                                          <td className="p-3 text-slate-600 dark:text-slate-300">
+                                                              {new Date(ret.timestamp).toLocaleDateString()}
+                                                          </td>
+                                                          <td className="p-3 font-mono text-blue-600 dark:text-blue-400">#{ret.originalSaleId.split('-')[1]}</td>
+                                                          <td className="p-3 text-center font-bold text-red-600 dark:text-red-400">{item.quantity}</td>
+                                                          <td className="p-3 text-slate-600 dark:text-slate-300">{item.reason}</td>
+                                                          <td className="p-3 text-center">
+                                                              {item.restock ? <span className="text-green-600 font-bold">YES</span> : <span className="text-slate-400">NO</span>}
+                                                          </td>
+                                                      </tr>
+                                                  );
+                                              })}
+                                          </tbody>
+                                      </table>
+                                  )
+                              )}
+                          </div>
+                      </div>
+                  </div>
+                  <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 rounded-b-xl flex justify-end">
+                      <button onClick={() => setIsDetailOpen(false)} className="px-6 py-2 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold rounded-lg hover:bg-slate-300 dark:hover:bg-slate-600 transition">Close</button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* Add/Edit Product Modal */}
+      {isProductModalOpen && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+                  <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center">
+                      <h3 className="text-xl font-bold text-slate-800 dark:text-white">{editingProduct ? 'Edit Product' : 'Add New Product'}</h3>
+                      <button onClick={() => setIsProductModalOpen(false)}><X className="text-slate-400 hover:text-slate-600" size={24} /></button>
+                  </div>
+                  <div className="p-6 overflow-y-auto flex-1 space-y-4">
+                      <div className="grid grid-cols-2 gap-4">
+                          <div className="col-span-2 md:col-span-1">
+                              <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">Product Name <span className="text-red-500">*</span></label>
+                              <input type="text" value={productForm.name} onChange={e => setProductForm({...productForm, name: e.target.value})} className={inputClass} />
+                          </div>
+                          <div className="col-span-2 md:col-span-1">
+                              <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">SKU <span className="text-red-500">*</span></label>
+                              <input type="text" value={productForm.sku} onChange={e => setProductForm({...productForm, sku: e.target.value})} className={inputClass} />
+                          </div>
+                          <div className="col-span-2 md:col-span-1">
+                              <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">Barcode</label>
+                              <input type="text" value={productForm.barcode || ''} onChange={e => setProductForm({...productForm, barcode: e.target.value})} className={inputClass} placeholder="Scan or enter barcode" />
+                          </div>
+                          <div className="col-span-2 md:col-span-1 relative group">
+                              <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">Category</label>
+                              <div className="relative">
+                                  <input 
+                                      type="text" 
+                                      value={productForm.category} 
+                                      onChange={e => {
+                                          setProductForm({...productForm, category: e.target.value});
+                                          setShowCategoryDropdown(true);
+                                      }}
+                                      onFocus={() => setShowCategoryDropdown(true)}
+                                      onBlur={() => setTimeout(() => setShowCategoryDropdown(false), 200)}
+                                      className={inputClass}
+                                      placeholder="Select or create..."
+                                  />
+                                  <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                                      <ChevronDown size={14} />
+                                  </div>
+                                  
+                                  {showCategoryDropdown && (
+                                      <div className="absolute z-20 w-full mt-1 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                                          {inputSuggestions
+                                              .filter(c => c.toLowerCase().includes((productForm.category || '').toLowerCase()))
+                                              .map(c => (
+                                              <div 
+                                                  key={c}
+                                                  onMouseDown={(e) => {
+                                                      e.preventDefault();
+                                                      setProductForm({...productForm, category: c});
+                                                      setShowCategoryDropdown(false);
+                                                  }}
+                                                  className="px-3 py-2 hover:bg-slate-100 dark:hover:bg-slate-600 cursor-pointer text-sm text-slate-700 dark:text-slate-200"
+                                              >
+                                                  {c}
+                                              </div>
+                                          ))}
+                                          
+                                          {productForm.category && !inputSuggestions.some(c => c.toLowerCase() === productForm.category?.toLowerCase()) && (
+                                              <div 
+                                                  onMouseDown={(e) => {
+                                                      e.preventDefault();
+                                                      setShowCategoryDropdown(false);
+                                                  }}
+                                                  className="px-3 py-2 hover:bg-blue-50 dark:hover:bg-blue-900/30 cursor-pointer text-sm text-blue-600 dark:text-blue-400 font-bold border-t border-slate-100 dark:border-slate-600 flex items-center"
+                                              >
+                                                  <Plus size={14} className="mr-1"/> Create "{productForm.category}"
+                                              </div>
+                                          )}
+                                      </div>
+                                  )}
+                              </div>
+                          </div>
+                          <div className="col-span-2 md:col-span-1">
+                               <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">Unit</label>
+                               <input type="text" value={productForm.unit} onChange={e => setProductForm({...productForm, unit: e.target.value})} className={inputClass} />
+                          </div>
+                          <div className="col-span-2 md:col-span-1">
+                              <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">Selling Price <span className="text-red-500">*</span></label>
+                              <input type="number" step="0.01" value={productForm.price} onChange={e => setProductForm({...productForm, price: parseFloat(e.target.value)})} className={inputClass} />
+                          </div>
+                          <div className="col-span-2 md:col-span-1">
+                              <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">Cost Price</label>
+                              <input type="number" step="0.01" value={productForm.cost} onChange={e => setProductForm({...productForm, cost: parseFloat(e.target.value)})} className={inputClass} />
+                          </div>
+                          <div className="col-span-2 md:col-span-1">
+                              <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">Current Stock</label>
+                              <input type="number" value={productForm.stock} onChange={e => setProductForm({...productForm, stock: parseInt(e.target.value)})} disabled={!!editingProduct} className={`${inputClass} disabled:opacity-50`} />
+                          </div>
+                          <div className="col-span-2 md:col-span-1">
+                              <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">Min Stock Level</label>
+                              <input type="number" value={productForm.minStockLevel} onChange={e => setProductForm({...productForm, minStockLevel: parseInt(e.target.value)})} className={inputClass} />
+                          </div>
+                          {/* New Field */}
+                          <div className="col-span-2 md:col-span-1">
+                              <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">Stock Expiry Date</label>
+                              <input type="date" value={productForm.stockExpiryDate || ''} onChange={e => setProductForm({...productForm, stockExpiryDate: e.target.value})} className={`${inputClass} dark:[color-scheme:dark]`} />
+                          </div>
+                          {/* Supplier Field */}
+                          <div className="col-span-2 md:col-span-1">
+                              <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">Supplier</label>
+                              <input type="text" value={productForm.supplier || ''} onChange={e => setProductForm({...productForm, supplier: e.target.value})} className={inputClass} placeholder="Supplier Name" />
+                          </div>
+                           <div className="col-span-2">
+                              <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-2">Product Image</label>
+                              <div className="flex items-start space-x-4">
+                                  <div className="relative w-24 h-24 rounded-xl bg-slate-100 dark:bg-slate-700 border-2 border-dashed border-slate-300 dark:border-slate-600 flex items-center justify-center overflow-hidden shrink-0 group">
+                                      {productForm.imageUrl ? (
+                                          <>
+                                              <img src={productForm.imageUrl} alt="Preview" className="w-full h-full object-cover" />
+                                              <button 
+                                                  onClick={() => setProductForm({...productForm, imageUrl: ''})}
+                                                  className="absolute inset-0 bg-black/50 text-white opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity"
+                                                  title="Remove Image"
+                                              >
+                                                  <X size={20} />
+                                              </button>
+                                          </>
+                                      ) : (
+                                          <div className="flex flex-col items-center text-slate-400">
+                                              <ImageIcon size={24} className="mb-1" />
+                                              <span className="text-[10px] font-medium">No Image</span>
+                                          </div>
+                                      )}
+                                  </div>
+                                  <div className="flex-1 space-y-3">
+                                      <div>
+                                          <input 
+                                              type="file" 
+                                              accept="image/*"
+                                              onChange={handleImageUpload}
+                                              className="block w-full text-xs text-slate-500 dark:text-slate-400
+                                                  file:mr-4 file:py-2 file:px-4
+                                                  file:rounded-lg file:border-0
+                                                  file:text-xs file:font-bold
+                                                  file:bg-blue-50 file:text-blue-700
+                                                  hover:file:bg-blue-100
+                                                  dark:file:bg-blue-900/30 dark:file:text-blue-300
+                                                  cursor-pointer"
+                                          />
+                                      </div>
+                                      <div className="relative">
+                                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs">URL</span>
+                                          <input 
+                                              type="text" 
+                                              value={productForm.imageUrl} 
+                                              onChange={e => setProductForm({...productForm, imageUrl: e.target.value})} 
+                                              className={inputClass}
+                                              placeholder="https://example.com/image.png" 
+                                          />
+                                      </div>
+                                  </div>
+                              </div>
+                          </div>
+                          <div className="col-span-2">
+                              <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1 flex justify-between">
+                                  <span>Description</span>
+                                  <button onClick={handleGenerateDescription} disabled={isGeneratingDesc} className="text-blue-600 flex items-center hover:underline disabled:opacity-50">
+                                      {isGeneratingDesc ? <RefreshCw className="animate-spin mr-1" size={12}/> : <Sparkles size={12} className="mr-1"/>} 
+                                      {isGeneratingDesc ? 'Generating...' : 'Generate with AI'}
+                                  </button>
+                              </label>
+                              <textarea rows={3} value={productForm.description} onChange={e => setProductForm({...productForm, description: e.target.value})} className={inputClass} />
+                          </div>
+                      </div>
+                  </div>
+                  <div className="p-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 rounded-b-xl flex justify-end space-x-3">
+                      <button onClick={() => setIsProductModalOpen(false)} className="px-4 py-2 text-slate-500 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition">Cancel</button>
+                      <button onClick={handleSaveProduct} className="px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 shadow-md transition">Save Product</button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* Bulk Edit Modal */}
+      {isBulkEditOpen && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-md p-6 animate-in zoom-in-95 duration-200">
+                  <h3 className="text-lg font-bold mb-2 text-slate-800 dark:text-white flex items-center"><Layers className="mr-2" size={20}/> Bulk Edit Products</h3>
+                  <p className="text-sm text-slate-500 mb-6">Editing {selectedIds.size} selected items. Leave fields blank to keep current values.</p>
+                  
+                  <div className="space-y-4">
+                      <div>
+                          <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">Category</label>
+                          <input type="text" placeholder="No Change" value={bulkEditForm.category} onChange={e => setBulkEditForm({...bulkEditForm, category: e.target.value})} className={inputClass} />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">Supplier</label>
+                          <input type="text" placeholder="No Change" value={bulkEditForm.supplier} onChange={e => setBulkEditForm({...bulkEditForm, supplier: e.target.value})} className={inputClass} />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">Min Stock Level</label>
+                          <input type="number" placeholder="No Change" value={bulkEditForm.minStockLevel} onChange={e => setBulkEditForm({...bulkEditForm, minStockLevel: e.target.value})} className={inputClass} />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">Price Adjustment (%)</label>
+                          <div className="flex items-center">
+                              <input type="number" placeholder="0" value={bulkEditForm.priceAdjustment} onChange={e => setBulkEditForm({...bulkEditForm, priceAdjustment: e.target.value})} className={inputClass} />
+                              <span className="ml-2 text-sm text-slate-500">%</span>
+                          </div>
+                          <p className="text-[10px] text-slate-400 mt-1">Example: '10' increases price by 10%. '-5' decreases by 5%.</p>
+                      </div>
+                  </div>
+
+                  <div className="flex justify-end space-x-3 mt-6">
+                      <button onClick={() => setIsBulkEditOpen(false)} className="px-4 py-2 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg">Cancel</button>
+                      <button onClick={handleBulkEditSubmit} className="px-6 py-2 bg-blue-600 text-white font-bold rounded-lg shadow-md hover:bg-blue-700">Apply Changes</button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* Bulk Print Labels Modal */}
+      {isBulkPrintOpen && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-4xl h-[85vh] flex flex-col animate-in zoom-in-95 duration-200">
+                  <div className="p-4 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-700/50 rounded-t-xl">
+                      <h3 className="font-bold text-slate-800 dark:text-white flex items-center"><Printer className="mr-2" size={20}/> Print Barcode Labels</h3>
+                      <div className="flex gap-2">
+                          <button onClick={handlePrintLabels} className="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm font-bold shadow hover:bg-blue-700 transition">Print Now</button>
+                          <button onClick={() => setIsBulkPrintOpen(false)}><X className="text-slate-400 hover:text-slate-600" size={24} /></button>
+                      </div>
+                  </div>
+                  
+                  <div className="flex-1 overflow-y-auto bg-slate-100 dark:bg-slate-900 p-8">
+                      <div id="print-area" className="bg-white text-black w-full min-h-full p-4 grid grid-cols-3 gap-4 shadow-lg mx-auto max-w-[210mm]">
+                          {products.filter(p => selectedIds.has(p.id)).map(product => (
+                              <div key={product.id} className="label-item border border-dashed border-slate-300 p-4 flex flex-col items-center justify-center text-center h-[140px] rounded-lg bg-white">
+                                  <div className="font-bold text-sm mb-1 truncate w-full px-2 text-black">{product.name}</div>
+                                  <div className="font-black text-lg mb-1 text-black">{symbol}{product.price.toFixed(2)}</div>
+                                  <LabelBarcode value={product.barcode || product.sku} />
+                              </div>
+                          ))}
                       </div>
                   </div>
               </div>
-
-              <div className="md:col-span-2">
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Product Name <span className="text-red-500">*</span></label>
-                <input 
-                  type="text" 
-                  value={formData.name} 
-                  onChange={e => setFormData({...formData, name: e.target.value})}
-                  className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white dark:placeholder-slate-400" 
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">SKU</label>
-                <input 
-                  type="text" 
-                  value={formData.sku} 
-                  onChange={e => setFormData({...formData, sku: e.target.value})}
-                  className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white dark:placeholder-slate-400" 
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Category <span className="text-red-500">*</span></label>
-                <div className="relative" ref={categoryDropdownRef}>
-                    <input 
-                      type="text" 
-                      value={formData.category} 
-                      onChange={e => {
-                          setFormData({...formData, category: e.target.value});
-                          setIsCategoryDropdownOpen(true);
-                      }}
-                      onFocus={() => setIsCategoryDropdownOpen(true)}
-                      className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white dark:placeholder-slate-400" 
-                      placeholder="Select or type to create..."
-                    />
-                    <button
-                        onClick={() => setIsCategoryDropdownOpen(!isCategoryDropdownOpen)}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-                        type="button"
-                    >
-                        <ChevronDown size={16} />
-                    </button>
-                    {isCategoryDropdownOpen && (
-                        <div className="absolute z-10 w-full mt-1 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                            {uniqueCategories.filter(c => c.toLowerCase().includes(formData.category?.toLowerCase() || '')).map(c => (
-                                <button
-                                    key={c}
-                                    type="button"
-                                    onClick={() => {
-                                        setFormData({...formData, category: c});
-                                        setIsCategoryDropdownOpen(false);
-                                    }}
-                                    className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 flex items-center justify-between"
-                                >
-                                    {c}
-                                    {formData.category === c && <Check size={14} className="text-blue-500" />}
-                                </button>
-                            ))}
-                            {!uniqueCategories.includes(formData.category || '') && formData.category && (
-                                <button
-                                    type="button"
-                                    onClick={() => setIsCategoryDropdownOpen(false)}
-                                    className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 dark:hover:bg-slate-600 text-blue-600 dark:text-blue-400 font-medium"
-                                >
-                                    + Create "{formData.category}"
-                                </button>
-                            )}
-                            {uniqueCategories.filter(c => c.toLowerCase().includes(formData.category?.toLowerCase() || '')).length === 0 && !formData.category && (
-                                <div className="px-3 py-2 text-sm text-slate-400 italic">Type to create new category</div>
-                            )}
-                        </div>
-                    )}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Price ({symbol}) <span className="text-red-500">*</span></label>
-                <input 
-                  type="number" 
-                  value={formData.price} 
-                  onChange={e => setFormData({...formData, price: parseFloat(e.target.value)})}
-                  className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white dark:placeholder-slate-400" 
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Cost ({symbol}) <span className="text-red-500">*</span></label>
-                <input 
-                  type="number" 
-                  value={formData.cost} 
-                  onChange={e => setFormData({...formData, cost: parseFloat(e.target.value)})}
-                  className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white dark:placeholder-slate-400" 
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Current Stock</label>
-                <div className="flex space-x-2">
-                    <input 
-                      type="number" 
-                      value={formData.stock} 
-                      onChange={e => setFormData({...formData, stock: parseFloat(e.target.value)})}
-                      step={formData.allowDecimal ? "0.001" : "1"}
-                      className="w-2/3 p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white dark:placeholder-slate-400" 
-                    />
-                    <div className="w-1/3 relative" ref={unitDropdownRef}>
-                        <input 
-                            type="text"
-                            value={formData.unit || ''}
-                            onChange={e => {
-                                setFormData({...formData, unit: e.target.value});
-                                setIsUnitDropdownOpen(true);
-                            }}
-                            onFocus={() => setIsUnitDropdownOpen(true)}
-                            placeholder="Unit"
-                            className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white dark:placeholder-slate-400"
-                        />
-                        <button
-                            onClick={() => setIsUnitDropdownOpen(!isUnitDropdownOpen)}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-                            type="button"
-                        >
-                            <ChevronDown size={16} />
-                        </button>
-                        {isUnitDropdownOpen && (
-                            <div className="absolute z-10 w-full mt-1 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                                {uniqueUnits.filter(u => u.toLowerCase().includes((formData.unit || '').toLowerCase())).map(u => (
-                                    <button
-                                        key={u}
-                                        type="button"
-                                        onClick={() => {
-                                            setFormData({...formData, unit: u});
-                                            setIsUnitDropdownOpen(false);
-                                        }}
-                                        className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 flex items-center justify-between"
-                                    >
-                                        {u}
-                                        {formData.unit === u && <Check size={14} className="text-blue-500" />}
-                                    </button>
-                                ))}
-                                {!uniqueUnits.includes(formData.unit || '') && formData.unit && (
-                                    <button
-                                        type="button"
-                                        onClick={() => setIsUnitDropdownOpen(false)}
-                                        className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 dark:hover:bg-slate-600 text-blue-600 dark:text-blue-400 font-medium"
-                                    >
-                                        + Use "{formData.unit}"
-                                    </button>
-                                )}
-                                {uniqueUnits.filter(u => u.toLowerCase().includes((formData.unit || '').toLowerCase())).length === 0 && !formData.unit && (
-                                    <div className="px-3 py-2 text-sm text-slate-400 italic">Type to create new unit</div>
-                                )}
-                            </div>
-                        )}
-                    </div>
-                </div>
-                <div className="flex items-center mt-2">
-                    <input 
-                        type="checkbox" 
-                        id="allowDecimal"
-                        checked={formData.allowDecimal || false}
-                        onChange={e => setFormData({...formData, allowDecimal: e.target.checked})}
-                        className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                    />
-                    <label htmlFor="allowDecimal" className="ml-2 text-sm text-slate-700 dark:text-slate-300 flex items-center">
-                        <Scale size={14} className="mr-1"/> Allow Decimal Quantity (e.g. Weight/Volume)
-                    </label>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Low Stock Alert Threshold</label>
-                <input 
-                  type="number" 
-                  value={formData.minStockLevel} 
-                  onChange={e => setFormData({...formData, minStockLevel: parseInt(e.target.value)})}
-                  className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white dark:placeholder-slate-400" 
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Expiry Date</label>
-                <input 
-                  type="date" 
-                  value={formData.stockExpiryDate || ''} 
-                  onChange={e => setFormData({...formData, stockExpiryDate: e.target.value})}
-                  className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white dark:placeholder-slate-400 dark:[color-scheme:dark]" 
-                />
-              </div>
-
-              <div className="md:col-span-2">
-                 <div className="flex justify-between items-center mb-1">
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Description</label>
-                    <button 
-                        type="button" 
-                        onClick={handleGenerateDescription}
-                        className="text-xs flex items-center text-purple-600 hover:text-purple-800 dark:text-purple-400 dark:hover:text-purple-300 font-semibold"
-                    >
-                        <Wand2 size={12} className="mr-1"/> Generate with AI
-                    </button>
-                 </div>
-                <textarea 
-                  rows={3}
-                  value={formData.description} 
-                  onChange={e => setFormData({...formData, description: e.target.value})}
-                  className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white dark:placeholder-slate-400" 
-                />
-              </div>
-            </div>
-
-            <div className="p-6 border-t border-slate-100 dark:border-slate-700 flex justify-end space-x-3 bg-slate-50 dark:bg-slate-800/50 rounded-b-2xl">
-              <button 
-                onClick={() => setIsModalOpen(false)}
-                className="px-4 py-2 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-lg transition"
-              >
-                Cancel
-              </button>
-              <button 
-                onClick={handleSave}
-                className="px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 shadow-md transition"
-              >
-                Save Product
-              </button>
-            </div>
           </div>
-        </div>
       )}
+
+      {/* Stock Adjustment Modal */}
+      {isAdjModalOpen && selectedProduct && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+              <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl w-full max-w-sm p-6 animate-in zoom-in-95 duration-200">
+                  <h3 className="text-lg font-bold mb-4 text-slate-800 dark:text-white">Adjust Stock: {selectedProduct.name}</h3>
+                  <div className="bg-slate-100 dark:bg-slate-700 p-3 rounded-lg mb-4 text-center">
+                      <span className="block text-xs text-slate-500 dark:text-slate-400 uppercase font-bold">Current Stock</span>
+                      <span className="text-2xl font-black text-slate-800 dark:text-white">{selectedProduct.stock} {selectedProduct.unit}</span>
+                  </div>
+                  <div className="space-y-4">
+                      <div>
+                          <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">Action</label>
+                          <div className="flex space-x-2">
+                              <button onClick={() => setAdjForm({...adjForm, type: 'ADD'})} className={`flex-1 py-2 text-xs font-bold rounded border ${adjForm.type === 'ADD' ? 'bg-green-100 border-green-200 text-green-700 dark:bg-green-900/30 dark:border-green-800 dark:text-green-400' : 'dark:border-slate-600 dark:text-slate-300'}`}>ADD</button>
+                              <button onClick={() => setAdjForm({...adjForm, type: 'REMOVE'})} className={`flex-1 py-2 text-xs font-bold rounded border ${adjForm.type === 'REMOVE' ? 'bg-red-100 border-red-200 text-red-700 dark:bg-red-900/30 dark:border-red-800 dark:text-red-400' : 'dark:border-slate-600 dark:text-slate-300'}`}>REMOVE</button>
+                              <button onClick={() => setAdjForm({...adjForm, type: 'SET'})} className={`flex-1 py-2 text-xs font-bold rounded border ${adjForm.type === 'SET' ? 'bg-blue-100 border-blue-200 text-blue-700 dark:bg-blue-900/30 dark:border-blue-800 dark:text-blue-400' : 'dark:border-slate-600 dark:text-slate-300'}`}>SET</button>
+                          </div>
+                      </div>
+                      <div>
+                          <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">Quantity</label>
+                          <input type="number" min="0" value={adjForm.quantity} onChange={e => setAdjForm({...adjForm, quantity: parseInt(e.target.value)})} className={`text-lg font-bold text-center ${inputClass}`} />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">Reason</label>
+                          <input type="text" value={adjForm.reason} onChange={e => setAdjForm({...adjForm, reason: e.target.value})} className={inputClass} placeholder="e.g. Damage, Restock, Count" />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-bold text-slate-500 dark:text-slate-400 mb-1">Notes</label>
+                          <input type="text" value={adjForm.notes} onChange={e => setAdjForm({...adjForm, notes: e.target.value})} className={inputClass} placeholder="Optional details..." />
+                      </div>
+                  </div>
+                  <div className="flex justify-end space-x-3 mt-6">
+                      <button onClick={() => setIsAdjModalOpen(false)} className="px-4 py-2 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg">Cancel</button>
+                      <button onClick={handleSubmitAdjustment} className="px-6 py-2 bg-slate-900 dark:bg-blue-600 text-white font-bold rounded-lg shadow-md">Confirm</button>
+                  </div>
+              </div>
+          </div>
+      )}
+
     </div>
   );
-};
+}
 
 export default Inventory;

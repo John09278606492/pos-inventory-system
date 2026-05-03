@@ -188,8 +188,6 @@ const App: React.FC = () => {
   useEffect(() => {
     if (currentUser) {
         // Simple redirect if user is on a page they no longer have permission for
-        // Ideally, Layout handles visibility, but this handles initial load/state changes
-        // For now, we trust Layout to hide links, and if they are on a dead link, they see empty content or we could redirect to Dashboard
     }
   }, [currentUser, currentView]);
 
@@ -241,7 +239,8 @@ const App: React.FC = () => {
         if (c.id === newSale.customerId) {
           let newCredit = c.storeCredit || 0;
           if (newSale.paymentMethod === 'STORE_CREDIT') {
-              newCredit = Math.max(0, newCredit - newSale.totalAmount);
+              // Allows negative balance (Debt)
+              newCredit = newCredit - newSale.totalAmount;
           }
           return {
             ...c,
@@ -260,14 +259,37 @@ const App: React.FC = () => {
   const handleProcessReturn = (returnTx: ReturnTransaction) => {
       setReturns(prev => [...prev, returnTx]);
       let restockedCount = 0;
+      const stockAdjustmentsToAdd: StockAdjustment[] = [];
+
       setProducts(prev => prev.map(p => {
           const returnItem = returnTx.items.find(ri => ri.productId === p.id);
           if (returnItem && returnItem.restock) {
               restockedCount += returnItem.quantity;
+              
+              // Create stock adjustment log
+              stockAdjustmentsToAdd.push({
+                  id: `adj-ret-${Date.now()}-${p.id}`,
+                  productId: p.id,
+                  productName: p.name,
+                  userId: currentUser?.id || 'system',
+                  userName: currentUser?.name || 'System',
+                  timestamp: Date.now(),
+                  type: 'ADD',
+                  quantity: returnItem.quantity,
+                  previousStock: p.stock,
+                  newStock: p.stock + returnItem.quantity,
+                  reason: `Return Restock (Ref: #${returnTx.originalSaleId.split('-')[1]})`,
+                  notes: returnItem.reason
+              });
+
               return { ...p, stock: p.stock + returnItem.quantity };
           }
           return p;
       }));
+
+      if (stockAdjustmentsToAdd.length > 0) {
+          setStockAdjustments(prev => [...prev, ...stockAdjustmentsToAdd]);
+      }
 
       if (returnTx.customerId) {
           setCustomers(prev => prev.map(c => {
@@ -325,19 +347,41 @@ const App: React.FC = () => {
 
     const order = purchaseOrders.find(o => o.id === orderId);
     if (order && newStatus === 'RECEIVED' && order.status !== 'RECEIVED') {
+        const stockAdjustmentsToAdd: StockAdjustment[] = [];
         setProducts(prevProducts => {
             const updatedProducts = [...prevProducts];
             order.items.forEach(item => {
                 const productIndex = updatedProducts.findIndex(p => p.id === item.productId);
                 if (productIndex >= 0) {
+                    const prevStock = updatedProducts[productIndex].stock;
+                    const newStock = prevStock + item.quantity;
+                    
+                    stockAdjustmentsToAdd.push({
+                        id: `adj-po-${Date.now()}-${item.productId}`,
+                        productId: item.productId,
+                        productName: item.productName,
+                        userId: currentUser?.id || 'system',
+                        userName: currentUser?.name || 'System',
+                        timestamp: Date.now(),
+                        type: 'ADD',
+                        quantity: item.quantity,
+                        previousStock: prevStock,
+                        newStock: newStock,
+                        reason: `PO Received (Ref: #${order.id})`,
+                        notes: `Supplier: ${order.supplier}`
+                    });
+
                     updatedProducts[productIndex] = {
                         ...updatedProducts[productIndex],
-                        stock: updatedProducts[productIndex].stock + item.quantity
+                        stock: newStock
                     };
                 }
             });
             return updatedProducts;
         });
+        if (stockAdjustmentsToAdd.length > 0) {
+            setStockAdjustments(prev => [...prev, ...stockAdjustmentsToAdd]);
+        }
         showToast('Inventory stock updated from received order.', 'SUCCESS');
     } else {
         showToast(`Order status updated to ${newStatus}.`, 'SUCCESS');
@@ -494,8 +538,8 @@ const App: React.FC = () => {
         />
       ) : (
         <>
-          {/* Floating Notifications Stack */}
-          {urgentHolds.length > 0 && (
+          {/* Floating Notifications Stack - Hidden if in POS View to allow POS to handle them locally in fullscreen */}
+          {urgentHolds.length > 0 && currentView !== 'pos' && (
               <div className="fixed top-20 right-4 z-[50] flex flex-col items-end gap-2 w-full max-w-sm pointer-events-none">
                   {urgentHolds.slice(0, 3).map(hold => {
                       const diff = Math.max(0, hold.expiryTime - Date.now());
@@ -595,6 +639,9 @@ const App: React.FC = () => {
                 onCartUpdate={setPosHasItems}
                 resumeHoldId={resumeHoldId}
                 onClearResumeHold={() => setResumeHoldId(null)}
+                onUrgentHoldClick={handleUrgentHoldClick}
+                urgentHolds={urgentHolds}
+                onAddCreditAdjustment={handleAddCreditAdjustment}
               />
             )}
 
@@ -659,7 +706,7 @@ const App: React.FC = () => {
         </>
       )}
       
-      {/* Toast Container remains mounted at root level */}
+      {/* Toast Container remains mounted at root level for all views EXCEPT POS in fullscreen which uses local one */}
       <ToastContainer toasts={toasts} removeToast={removeToast} />
     </>
   );

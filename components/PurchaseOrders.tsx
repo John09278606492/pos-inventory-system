@@ -133,6 +133,8 @@ const PurchaseOrders: React.FC<PurchaseOrdersProps> = ({
     o.id.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  const inputClass = "w-full p-2 border border-slate-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:text-white placeholder-slate-400 dark:placeholder-slate-500";
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -155,7 +157,7 @@ const PurchaseOrders: React.FC<PurchaseOrdersProps> = ({
           placeholder="Search by supplier or PO ID..." 
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-800 dark:text-white shadow-sm placeholder-slate-400 dark:placeholder-slate-500"
+          className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-300 dark:border-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-slate-900 dark:text-white shadow-sm placeholder-slate-400 dark:placeholder-slate-500"
         />
       </div>
 
@@ -272,7 +274,7 @@ const PurchaseOrders: React.FC<PurchaseOrdersProps> = ({
                     type="text" 
                     value={supplier} 
                     onChange={e => setSupplier(e.target.value)}
-                    className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white dark:placeholder-slate-400" 
+                    className={inputClass} 
                   />
                 </div>
                 <div>
@@ -281,7 +283,7 @@ const PurchaseOrders: React.FC<PurchaseOrdersProps> = ({
                     type="date" 
                     value={expectedDate} 
                     onChange={e => setExpectedDate(e.target.value)}
-                    className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white dark:[color-scheme:dark]" 
+                    className={`${inputClass} dark:[color-scheme:dark]`} 
                   />
                 </div>
               </div>
@@ -296,7 +298,7 @@ const PurchaseOrders: React.FC<PurchaseOrdersProps> = ({
                     <select 
                       value={selectedProductId}
                       onChange={(e) => handleProductSelect(e.target.value)}
-                      className="w-full p-2 text-sm border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white"
+                      className={inputClass}
                     >
                       <option value="">Select Product</option>
                       {products.map(p => (
@@ -311,7 +313,7 @@ const PurchaseOrders: React.FC<PurchaseOrdersProps> = ({
                       min="1"
                       value={itemQuantity}
                       onChange={(e) => setItemQuantity(parseInt(e.target.value) || 0)}
-                      className="w-full p-2 text-sm border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white"
+                      className={inputClass}
                     />
                   </div>
                   <div className="w-32">
@@ -322,7 +324,7 @@ const PurchaseOrders: React.FC<PurchaseOrdersProps> = ({
                       step="0.01"
                       value={itemCost}
                       onChange={(e) => setItemCost(parseFloat(e.target.value) || 0)}
-                      className="w-full p-2 text-sm border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white"
+                      className={inputClass}
                     />
                   </div>
                   <button 

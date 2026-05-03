@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { User, UserRole, Permission } from '../types';
 import { ROLE_PERMISSIONS } from '../constants';
@@ -140,6 +139,8 @@ const UserManagement: React.FC<UserManagementProps> = ({ users, onAddUser, onUpd
       }
   };
 
+  const inputClass = "w-full p-2.5 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white placeholder-slate-400 dark:placeholder-slate-500";
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -237,7 +238,7 @@ const UserManagement: React.FC<UserManagementProps> = ({ users, onAddUser, onUpd
                                     required
                                     value={formData.name} 
                                     onChange={e => setFormData({...formData, name: e.target.value})} 
-                                    className="w-full p-2.5 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white"
+                                    className={inputClass}
                                     placeholder="John Doe"
                                   />
                               </div>
@@ -248,7 +249,7 @@ const UserManagement: React.FC<UserManagementProps> = ({ users, onAddUser, onUpd
                                     required
                                     value={formData.email} 
                                     onChange={e => setFormData({...formData, email: e.target.value})} 
-                                    className="w-full p-2.5 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white"
+                                    className={inputClass}
                                     placeholder="john@nexus.com"
                                   />
                               </div>
@@ -260,7 +261,7 @@ const UserManagement: React.FC<UserManagementProps> = ({ users, onAddUser, onUpd
                                         required={!editingUser}
                                         value={formData.password} 
                                         onChange={e => setFormData({...formData, password: e.target.value})} 
-                                        className="w-full p-2.5 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-slate-700 dark:border-slate-600 dark:text-white"
+                                        className={inputClass}
                                         placeholder={editingUser ? "••••••••" : "Set password"}
                                       />
                                       <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
